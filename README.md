@@ -1,227 +1,138 @@
 # ds5-audio-haptics
 
-Feel your game's sound in a **Bluetooth** DualSense. A small background service listens to
-whatever your PC or Steam Deck is playing and drives the controller's HD haptic actuators
-(the voice coils, not classic rumble) from it: bass, gunshots and impacts, panned between the
-two grips to follow the sound.
+Feel your game's sound in a **Bluetooth DualSense** on Linux. A small background service
+listens to whatever your Steam Deck or PC is playing and drives the controller's HD haptics
+(the voice coils, not classic rumble) and, optionally, its adaptive triggers.
 
-![The settings page: live levels, response curve and sliders](docs/img/settings-dark.png)
+![Live view: sound levels, detected impacts and the haptic strength being sent](docs/img/live.png)
 
-It works with any game, needs no game support, and runs entirely in your user account:
-no kernel module, no root, nothing installed outside your home directory.
-
-## Status
-
-Personal project, early. What has actually been tested:
-
-| | |
-|---|---|
-| Steam Deck (SteamOS 3.9), DualSense over Bluetooth | Works, used daily by the author |
-| Alongside Steam Input (lightbar, LEDs, game rumble) | Works; see [Steam Input](#steam-input) |
-| Controller going to sleep and reconnecting | Works |
-| Bazzite desktop | Installs and runs; less play time than the Deck |
-| DualSense Edge | Detected by the code, **never tested** |
-| Adaptive triggers, `shooter` profile | Works on the author's DualSense |
-| Adaptive triggers, `racing` and `generic` profiles, switching by running game | Written and unit-tested, **not yet tried in a game** |
-| Rumble fallback (`mode = "rumble"`) | Written, **never tested on hardware** |
-| USB connection | Not supported for HD haptics (over USB the controller is a normal audio device) |
-| Following a change of output device (speakers / HDMI / headphones) | Designed for, **not yet verified** |
-| Other distributions | Should work with PipeWire and BlueZ; untested |
-
-End-to-end latency has not been measured physically. Inside the service, audio is written to
-the controller 0.06 ms after it arrives (0.6 ms worst case seen); before that come about 5 ms
-of capture, up to 10.7 ms of packet assembly and 3 ms of filtering. Bluetooth and the
-controller's own buffering come on top and are unknown.
-
-## Requirements
-
-- x86-64 Linux with **PipeWire** (the `pw-record` tool) and **BlueZ**
-- A DualSense paired and connected over **Bluetooth**
-- Write access to the controller's `hidraw` node. Steam's udev rules provide this, so if Steam
-  is installed you already have it (SteamOS, Bazzite and most distributions' `steam-devices`
-  package).
+- **Works with any game**, no game support needed.
+- **Bass, impacts and direction**: low frequencies become haptics, gunshots and hits add a
+  sharp pulse, and the effect moves between the grips to follow the sound.
+- **Keeps music out of the way**: steady background sound is turned down so effects stand out.
+- **Adaptive triggers** (optional): gun-trigger click and recoil in shooters, brake and
+  throttle feel in racing games, chosen automatically from the running Steam game.
+- **Settings page** with live graphs, usable from your phone while you play.
+- **No root, no kernel module**: everything lives in your home directory and survives SteamOS
+  updates. Coexists with Steam Input.
 
 ## Install
+
+You need x86-64 Linux with PipeWire, a DualSense connected over **Bluetooth**, and Steam (or
+your distribution's `steam-devices` package) installed, which grants access to the controller.
 
 ```sh
 curl -L https://github.com/ruimartin/ds5-audio-haptics/releases/latest/download/ds5-audio-haptics-x86_64-linux.tar.gz | tar xz
 ds5-audio-haptics/install.sh
 ```
 
-On a Steam Deck, do this in Desktop Mode (Konsole) or over SSH. The service then runs in
-Gaming Mode too and starts by itself at every login. It survives SteamOS updates because
-everything lives in your home directory:
+On a Steam Deck, run this in Desktop Mode (Konsole). The service starts at every login and
+keeps running in Gaming Mode. Play something and you should feel it.
 
-| Path | What |
-|---|---|
-| `~/.local/bin/ds5-audio-haptics`, `ds5-tone`, `ds5-trigger` | static binaries |
-| `~/.config/systemd/user/ds5-audio-haptics.service` | user service |
-| `~/.config/ds5-audio-haptics/config.toml` | settings (created on first install, never overwritten) |
-| `~/.local/share/applications/ds5-audio-haptics.desktop` | menu entry for the settings page |
+- Check: `ds5-audio-haptics status | grep '"output"'` should name your controller.
+- Remove: `ds5-audio-haptics/install.sh uninstall` (your settings file is kept).
+- If a command is not found, use its full path: `~/.local/bin/ds5-audio-haptics`.
 
-Check that it found your controller:
+## Settings page
 
-```sh
-ds5-audio-haptics status | grep -E '"(capture|output)"'
-#  "capture": "running",
-#  "output": "hd /dev/hidraw8 DualSense Wireless Controller (aa:bb:cc:dd:ee:ff)",
-```
+Open **DualSense Audio Haptics** from the application menu, or run `ds5-audio-haptics ui`.
 
-Then play something. If `~/.local/bin` is not in your `PATH`, call the tools by full path.
+<img src="docs/img/settings.png" alt="The settings page" width="640">
 
-To remove it: `ds5-audio-haptics/install.sh uninstall` (your config file is kept).
+- **Live** shows the last 12 seconds: volume, bass, what is being treated as background, the
+  haptic strength sent, and each detected impact. It works without a controller connected.
+- **Response curve** shows how bass level becomes haptic strength; the dot is the sound now.
+- Changes apply immediately. **Save as default** keeps them; **↺** returns one setting to the
+  preset. **Game / Music** switches preset: *Game* is punchy and rejects music, *Music*
+  follows the bass line faithfully.
 
-### Quick hardware check
+### From your phone
 
-`ds5-tone` plays a plain test tone, independent of the service and of any audio:
+<img src="docs/img/settings-phone.png" alt="The settings page on a phone" width="220" align="right">
 
-```sh
-ds5-tone --list                       # controllers found
-ds5-tone --freq 60 --amp 0.25 --secs 3
-ds5-tone --freq 160 --channel left    # left grip only
-```
-
-## Using it
-
-### Settings page
-
-The service serves a settings page on the machine it runs on. Open **DualSense Audio Haptics**
-from the application menu, or run:
-
-```sh
-ds5-audio-haptics ui        # opens http://127.0.0.1:5757/
-```
-
-![Settings page, light theme](docs/img/settings-light.png)
-
-- **Live** shows the last 12 seconds: overall volume, the bass that is felt, what the service
-  currently treats as background, the haptic strength being sent, and each detected impact.
-  It works without a controller connected, so you can watch and tune before you feel anything.
-- **Response curve** plots bass level against haptic strength; the dot is the sound right now.
-  The sliders in the "Response curve" card reshape it.
-- Every change applies immediately. **Save as default** keeps it across restarts; the ↺ next
-  to a slider returns that one setting to the preset.
-
-#### In Gaming Mode on a Steam Deck
-
-The page can be added to Steam like a game, no Decky needed:
-
-1. Switch to Desktop Mode and open Steam.
-2. **Games → Add a Non-Steam Game to My Library…**, tick **DualSense Audio Haptics**, **Add
-   Selected Programs**.
-3. Back in Gaming Mode it is in your library under Non-Steam. Launched from there it opens
-   full screen in Firefox (or Chrome / Chromium if that is what you have; install one from
-   Discover if there is none). Use the touch screen or the trackpad; close it with
-   **STEAM → Exit game**.
-
-A game can stay running while you tune: switch between it and the page from the STEAM menu.
-
-#### From your phone, while you play
-
-<img src="docs/img/settings-phone.png" alt="The settings page on a phone" width="260" align="right">
-
-By default the page is only reachable from the machine itself. To open it from another device
-on your home network, tick **Allow other devices on my network** at the bottom of the page, or:
+The easiest way to tune while playing. Tick **Allow other devices on my network** at the
+bottom of the page, or run:
 
 ```sh
 ds5-audio-haptics set lan=true
-ds5-audio-haptics save            # keep it on after a restart
-ds5-audio-haptics status | grep -E '"ui_(name|lan)"'
-#  "ui_lan": "http://192.168.1.20:5757/",
-#  "ui_name": "http://dsconfig-steamdeck.local:5757/",
+ds5-audio-haptics save
+ds5-audio-haptics status | grep '"ui_'
+#  "ui_lan":  "http://192.168.1.20:5757/"
+#  "ui_name": "http://dsconfig-steamdeck.local:5757/"
 ```
 
-Open either address in your phone's browser and tune while the game is running on the Deck or
-PC. This is the easiest way to adjust things in Gaming Mode.
+Open either address on your phone. The `.local` name is announced by the service itself; if
+your phone does not resolve it, use the numeric one.
 
-The `.local` name is announced by the service itself (a small built-in mDNS responder; no
-Avahi needed) and only while this option is on. It defaults to `dsconfig-<hostname>` so two
-machines never clash; set `mdns_name = "dsconfig"` under `[ui]` in the config file for a
-shorter one. iOS, macOS, Windows 10+, Android 12+ and most Linux desktops resolve `.local`
-names; if a device does not, use the numeric address.
-
-There is no password: with this on, anyone on your local network can change the haptics
-settings (nothing else is exposed). The service answers only private network addresses and
-refuses requests that come through another web site. Leave it off on networks you do not
-trust. If a firewall is active, TCP port 5757 must be allowed.
+There is no password: while this is on, anyone on your local network can change these
+settings (nothing else is exposed). It is off by default, answers only private network
+addresses, and refuses requests coming through other web sites.
 
 <br clear="right">
 
-Set `[ui] enabled = false` in the config file to turn the page off entirely.
+### In Gaming Mode on a Steam Deck
+
+Add the page to Steam once: in Desktop Mode, **Games → Add a Non-Steam Game…** and tick
+**DualSense Audio Haptics**. In Gaming Mode it then opens full screen in Firefox (install it
+from Discover if needed). Close it with **STEAM → Exit game**.
 
 ### Command line
 
-The same settings can be changed from a terminal, also while a game is running:
-
 ```sh
-ds5-audio-haptics set intensity=0.7        # overall strength (0..4)
-ds5-audio-haptics set preset=music         # or: game (default)
-ds5-audio-haptics set enabled=false        # pause; true to resume
-ds5-audio-haptics set lowpass_hz=default   # back to the preset's value
-ds5-audio-haptics status                   # everything, including current values
-ds5-audio-haptics save                     # keep the running settings across restarts
+ds5-audio-haptics set intensity=0.7      # any setting, applied immediately
+ds5-audio-haptics set preset=music       # or game
+ds5-audio-haptics set enabled=false      # pause
+ds5-audio-haptics set lowpass_hz=default # back to the preset's value
+ds5-audio-haptics save                   # keep across restarts
+ds5-audio-haptics status                 # everything, as JSON
 ```
 
-`save` rewrites `config.toml` without its comments; `ds5-audio-haptics default-config` prints
-a fresh commented one. Editing the file by hand works too, followed by
-`systemctl --user restart ds5-audio-haptics`.
+Settings are stored in `~/.config/ds5-audio-haptics/config.toml`. Every key is documented in
+[config.example.toml](config.example.toml).
 
-### The settings that matter most
+## The main settings
 
-| Key | Default (game) | What it does |
+| Setting | Default | What it does |
 |---|---|---|
 | `intensity` | 1.0 | Overall strength |
-| `background_reject` | 0.9 | Turns down steady sound (music, engine drones) so that sounds standing out from it dominate. 0 = off: everything with bass is felt |
-| `background_rise_db_s` | 3 | How fast a sustained sound becomes "background". Higher fades music sooner |
-| `volume_threshold_db` | -90 (off) | Ignore everything quieter than this overall volume. Helps when a game's music is clearly quieter than its effects; watch the Live graph to pick a value |
 | `bass_boost_db` | 6 | Extra strength below 70 Hz |
-| `lowpass_hz` | 150 | Upper edge of the bass band that is felt |
-| `stereo`, `stereo_width` | true, 1.5 | Pans haptics between the grips following the stereo image; width above 1 exaggerates |
-| `transient` | true | Adds a short pulse on gunshots, impacts and menu blips |
-| `transient_gain` | 0.85 | Strength of those pulses |
-| `transient_sensitivity` | 1.0 | Lower it if music triggers too many pulses |
+| `lowpass_hz` | 150 | Upper edge of the bass that is felt |
+| `background_reject` | 0.9 | Turns down steady sound such as music. 0 = feel everything |
+| `volume_threshold_db` | off | Ignores everything quieter than this. Useful when music is clearly quieter than effects; pick the value from the Live graph |
+| `transient`, `transient_gain` | on, 0.85 | A short pulse on gunshots, hits and menu sounds, and its strength |
+| `transient_sensitivity` | 1.0 | Lower it if music triggers pulses |
+| `stereo`, `stereo_width` | on, 1.5 | Moves haptics between the grips with the sound; above 1 exaggerates |
 
-All keys, with comments, are in [config.example.toml](config.example.toml).
+## Adaptive triggers
 
-**Presets.** `game` is punchy: it rejects background music, emphasises impacts and pans.
-`music` follows the bass line faithfully, in mono, with no rejection and lighter pulses.
+<img src="docs/img/triggers.png" alt="Adaptive trigger settings" width="250" align="right">
 
-### Adaptive triggers
-
-Optional and **off by default**, because a game that drives the DualSense's adaptive triggers
-itself would fight with this. Choose a behaviour in the settings page ("Adaptive triggers") or
-with `ds5-audio-haptics set trigger_profile=auto`:
+**Off by default**, because a game that drives the adaptive triggers itself would conflict.
+Pick a behaviour in the settings page or with `ds5-audio-haptics set trigger_profile=auto`.
 
 | Profile | R2 | L2 |
 |---|---|---|
-| `shooter` | Gun trigger: a click point with resistance, and a kick on each shot | Lighter steady resistance, half the kick |
-| `racing` | Throttle: light resistance, the faintest kick on bumps | Brake: firm resistance, a moderate kick on bumps |
-| `generic` | Kicks with the haptics, no resistance | Same as R2 |
-| `auto` | `shooter` or `racing` according to the running Steam game, `generic` for anything else | |
-| `off` | Never touched | Never touched |
+| `shooter` | Gun trigger: click point, kick per shot | Light resistance, half the kick |
+| `racing` | Throttle: light resistance, faint kick | Brake: firm resistance, moderate kick |
+| `generic` | Kick on impacts | Kick on impacts |
+| `auto` | Shooter or racing by the running game, generic otherwise | |
 
-Kicks come from the same impact detection as the pulses in the grips, and the controller only
-makes them felt while the trigger is held down, so in a shooter it is your own trigger pull
-that kicks. `trigger_resistance` and `trigger_strength` (both 0 to 8) scale the whole profile;
-`trigger_freq_hz = 0` turns the kick from a short buzz into a single push.
+- A trigger is kicked only **while you are pulling it** (past 20% by default), so a controller
+  lying on the table stays quiet.
+- `trigger_resistance` and `trigger_strength` (0 to 8) scale the whole profile.
+- `trigger_freq_hz = 0` makes the kick a single push instead of a short buzz.
 
-**How `auto` knows the game.** It reads the Steam app ID of the running game from Steam's own
-launcher process, then decides its kind from, in order:
-
-1. your own lists under `[games]` in the config file;
-2. two built-in lists of popular titles (44 shooters, 35 racing games, every ID checked
-   against the Steam store; see [src/games.rs](src/games.rs));
-3. the game's Steam store tags (FPS, Shooter, Racing, Driving and relatives), read from the
-   cache the Steam client keeps on disk. Only a game's leading tags count, so Portal 2, whose
-   "FPS" tag is far down its list, is not treated as a shooter.
-
-So any Steam game in your library is recognised without a list, and nothing is looked up
-online. Non-Steam games get `generic`. To see what a game resolves to, or to override it:
+**How `auto` recognises a game.** It reads the running game's Steam app ID and decides from
+your own lists, then a built-in list of popular titles, then the game's Steam store tags
+(FPS, Shooter, Racing, Driving…) as cached on disk by the Steam client. Nothing is looked up
+online. Non-Steam games get `generic`.
 
 ```sh
-ds5-audio-haptics game             # the game running now
-ds5-audio-haptics game 1684930     # any app ID (the number in its store URL)
+ds5-audio-haptics game            # what the running game resolves to
+ds5-audio-haptics game 1684930    # any app ID (the number in its store URL)
 ```
+
+To override a game, add its ID to the config file:
 
 ```toml
 [games]
@@ -229,111 +140,111 @@ shooter = [1234560]
 racing = [1234570]
 ```
 
-A trigger is only kicked while the controller reports it as pulled (past about 20% by
-default, `trigger_start`); an idle trigger's motor is left alone, so a controller lying on the
-table stays quiet.
+<br clear="right">
 
-Things to know: the trigger motors are audible; very fast automatic fire (above roughly 11
-shots a second) skips some shots; and the racing profile reacts to sound, not to the car, so
-"brake feel" is a fixed resistance plus kicks on loud bumps, not real ABS feedback.
+## Good to know
 
-### Known limits
+- **Music and effects cannot be truly separated**; they arrive as one stream. Background
+  rejection is a heuristic: loud drum hits can get through, and after an intense moment
+  louder music may be felt for a few seconds.
+- **Everything on the default output is used**, including voice chat and videos.
+- **Game rumble wins.** When a game rumbles through Steam Input the controller plays that,
+  and audio haptics resume the moment it ends. Turn rumble off for a game in Steam Input if
+  you prefer audio haptics only.
+- **Steam Input is not disturbed.** Haptics reports carry no controller state, so lightbar,
+  LEDs and volumes are never touched. Trigger profiles change the triggers and nothing else.
+- **Direction is clearer for sharp sounds** than for low rumbles: the grips share one shell.
+- **Trigger motors are audible**, and automatic fire above about 11 shots a second skips some.
+- **The racing profile reacts to sound, not to the car**: fixed pedal resistance plus kicks on
+  loud bumps, not real ABS feedback.
+- **One controller at a time.** With several connected, set `device = "<its Bluetooth address>"`.
 
-- A game sends music and effects as one mixed stream, so they cannot be truly separated.
-  `background_reject` is a heuristic: loud drum hits can still get through, and after an
-  intense moment louder music can be felt for a few seconds until it is recognised as
-  background again. Sustained gunfire is deliberately never faded.
-- The two grips are mechanically coupled. Direction is clear for sharp sounds and vague for
-  low rumbles.
-- Everything playing on the default output is used, including voice chat and videos.
+## What has been tested
 
-## Steam Input
+| | |
+|---|---|
+| Steam Deck (SteamOS 3.9) with a DualSense over Bluetooth, alongside Steam Input | Works, used daily by the author |
+| Controller sleep and reconnect | Works |
+| Adaptive triggers, `shooter` profile | Works |
+| Bazzite desktop | Installs and runs; little play time |
+| `generic` trigger profile, switching profile by running game | Works, little play time |
+| `racing` trigger profile | Unit-tested, **never tried in a game** |
+| DualSense Edge | Recognised by the code, **never tested** |
+| Rumble fallback (`mode = "rumble"`, classic rumble when HD haptics are unavailable) | **Never tested on hardware** |
+| Following a change of output device | Designed for, **not verified** |
+| USB connection | Not supported: over USB the controller is an ordinary audio device |
 
-Steam keeps the controller's `hidraw` node open and sends its own reports for the lightbar,
-player LEDs, triggers and rumble. This service coexists with that:
+Latency has not been measured end to end. Inside the service, audio reaches the controller
+write 0.1 ms after it arrives; capture, packet assembly and filtering add roughly 8 to 19 ms
+before that, and Bluetooth plus the controller's own buffering come on top.
 
-- By default it only sends haptics reports (ID `0x32`) that contain no controller state, so it
-  cannot change the lightbar, LEDs, mute light, triggers or volumes.
-- With an adaptive-trigger profile switched on it also sends state reports (ID `0x31`) with
-  only the two trigger flags set: the triggers change, nothing else does.
-- When a game rumbles through Steam Input, the controller plays the rumble instead, and the
-  audio haptics come back by themselves the moment the rumble ends. If you prefer audio
-  haptics only, turn rumble off for that game in Steam Input.
+## Troubleshooting
+
+| `ds5-audio-haptics status` shows | What to do |
+|---|---|
+| `"output": "none (no Bluetooth DualSense)"` | Press the PS button; a USB cable does not count. It is picked up within seconds |
+| `"output": "none (… Permission denied)"` | Install Steam or your distribution's `steam-devices` package |
+| `"capture": "cannot run pw-record …"` | Install PipeWire's command-line tools |
+| `"output": "hd …"` but nothing is felt | Run the test tone below. If it works, raise `intensity` or set `background_reject=0` |
+| `"output": "rumble …"` | HD haptics were unavailable and it fell back to classic rumble |
+
+```sh
+ds5-tone --freq 60 --amp 0.25 --secs 3     # test tone on both grips, no audio needed
+ds5-tone --freq 160 --channel left         # left grip only
+ds5-trigger --side right --ms 1000         # vibrate R2 for a second (hold it to feel it)
+journalctl --user -u ds5-audio-haptics -e  # the service's log
+```
 
 ## How it works
 
 ```
-default output's monitor ──pw-record──▶ DSP ──▶ 3 kHz stereo signed 8-bit ──▶ /dev/hidrawN
-   (48 kHz, passive tap,                              one 142-byte report
-    adds no delay to what you hear)                   every 10.67 ms
+default output's monitor ──pw-record──▶ DSP ──▶ 3 kHz stereo, signed 8-bit ──▶ /dev/hidrawN
+   (passive tap: adds no delay                      one 142-byte Bluetooth report
+    to what you hear)                               every 10.67 ms
 ```
 
-1. **Capture.** `pw-record` taps the default sink's monitor, with no fixed target so that
-   PipeWire can move it when the default output changes. Capture only runs while a
-   controller is connected.
-2. **DSP** (`src/dsp.rs`). High-pass, bass shelf and 4th-order low-pass at 48 kHz; decimation to
-   3 kHz; one dynamics stage (gate, level curve, compressor, background rejection); an onset
-   detector that adds a decaying pulse per impact, low-pitched for dull hits and sharper for
-   bright ones; panning from the stereo balance above 300 Hz; soft limiter.
-3. **Output** (`src/protocol.rs`, `src/service.rs`). Bluetooth output report `0x32` with a
-   control sub-packet and a 64-byte haptics sub-packet, CRC-32 seeded with `0xA2`. After two
-   seconds of silence it stops transmitting to save battery. The controller is found through
-   sysfs and re-found after it sleeps or reconnects.
+Audio is captured from the default output with `pw-record`, filtered down to the bass band,
+shaped (gate, level curve, compressor, background rejection, impact pulses, panning) and sent
+to the controller as Bluetooth output report `0x32`. Capture runs only while a controller is
+connected or the settings page is open, and transmission stops after two seconds of silence.
+Adaptive triggers use report `0x31` with only the trigger flags set.
 
-The report format, the evidence for each field and the hardware test results are written up in
-[docs/PROTOCOL.md](docs/PROTOCOL.md); open risks are in [docs/RISKS.md](docs/RISKS.md).
-
-A local control socket (`$XDG_RUNTIME_DIR/ds5-audio-haptics.sock`, one JSON object per line)
-backs the `status` / `set` / `save` commands. The settings page posts the same JSON requests
-to `/api`, and a future Decky Loader plugin would use the socket.
-
-## Troubleshooting
-
-| `status` shows | Meaning |
-|---|---|
-| `output: none (no Bluetooth DualSense)`, `capture: waiting for a controller` | Not connected, or connected by USB. Press the PS button; check `ds5-tone --list`. The service picks it up within a few seconds |
-| `output: none (/dev/hidrawN: Permission denied …)` | No udev rule grants access. Install your distribution's `steam-devices` package, or Steam |
-| `capture: cannot run pw-record …` | PipeWire's tools are not installed |
-| `output: hd …` but nothing is felt | Run `ds5-tone`. If the tone works, raise `intensity` or set `background_reject=0`; if not, the controller is probably in rumble mode from another program |
-| `output: rumble …` | HD output was unavailable and `mode = "auto"` fell back to classic rumble |
-
-Logs: `journalctl --user -u ds5-audio-haptics -e`
+The report formats, the evidence for each field and the hardware test results are in
+[docs/PROTOCOL.md](docs/PROTOCOL.md); open risks in [docs/RISKS.md](docs/RISKS.md). The
+`status` / `set` / `save` commands and the settings page share one JSON protocol, also
+available on a local socket (`$XDG_RUNTIME_DIR/ds5-audio-haptics.sock`).
 
 ## Building
-
-The release binaries are static (musl) and have no runtime dependencies besides `pw-record`.
 
 ```sh
 rustup target add x86_64-unknown-linux-musl
 scripts/build.sh test     # unit tests
 scripts/package.sh        # target/bundle/ds5-audio-haptics-x86_64-linux.tar.gz
+scripts/deploy.sh user@host   # build, copy over SSH and install there
 ```
 
-On an image-based system without a toolchain (SteamOS, Bazzite), build inside a distrobox:
-`scripts/build.sh` falls back to a box named `dsdeck-dev` with rustup installed under
-`~/.local/share/dsdeck-dev` (override with `DS5_DISTROBOX` and `DS5_TOOLCHAIN`).
-
-`scripts/deploy.sh user@host` builds, copies the bundle over SSH and installs it there.
-
-`ds5-audio-haptics render < in.f32 > out.s8` runs the DSP offline on raw 48 kHz stereo float
-audio, which is how the presets were tuned against recordings of real games.
+The binaries are static and need nothing at run time except `pw-record`. On SteamOS or
+Bazzite, where there is no toolchain, `scripts/build.sh` uses a distrobox named `dsdeck-dev`
+with rustup under `~/.local/share/dsdeck-dev` (override with `DS5_DISTROBOX`,
+`DS5_TOOLCHAIN`). `ds5-audio-haptics render < in.f32 > out.s8` runs the DSP offline on raw
+48 kHz stereo float audio, which is how the presets were tuned against game recordings.
 
 ## Credits
 
 - The Bluetooth haptics report format is **Sdore's SAxense research**:
   <https://apps.sdore.me/SAxense> ([egormanga/SAxense](https://github.com/egormanga/SAxense)).
   This project would not exist without it.
-- Nielk1's corrections and PS5 packet captures in SAxense issue #1.
-- [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) for the haptics-only report variant
-  and counters.
-- [loteran/DS5Dongle](https://github.com/loteran/DS5Dongle) for the "Audio Auto Haptics" idea
-  of deriving haptics from game audio.
+- Nielk1, for the corrections and PS5 captures in SAxense issue #1 and for the trigger effect
+  documentation.
+- [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) for the haptics-only report variant.
+- [loteran/DS5Dongle](https://github.com/loteran/DS5Dongle) for the idea of deriving haptics
+  from game audio.
+- [nowrep/dualsensectl](https://github.com/nowrep/dualsensectl) as the reference for setting
+  triggers over Bluetooth.
 
-No code was copied from these projects; the implementation here is independent.
-
-Not affiliated with or endorsed by Sony. "DualSense" and "PlayStation" are trademarks of Sony
-Interactive Entertainment Inc. Provided as is: it sends undocumented reports to your
-controller, at your own risk.
+No code was copied from these projects. Not affiliated with or endorsed by Sony; "DualSense"
+and "PlayStation" are trademarks of Sony Interactive Entertainment Inc. Provided as is: it
+sends undocumented reports to your controller, at your own risk.
 
 ## License
 
