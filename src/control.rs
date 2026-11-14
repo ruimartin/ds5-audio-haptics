@@ -37,6 +37,7 @@ pub fn status(shared: &Shared) -> Value {
         "overrides": cfg.dsp,
         "filter_delay_ms": lowpass_delay_ms(params.lowpass_hz),
         "response_curve": response_curve(&params),
+        "game": game(shared, &cfg),
         "ui": cfg.ui.enabled.then(|| format!("http://127.0.0.1:{}/", cfg.ui.port)),
         "lan": cfg.ui.lan,
         "ui_name": (cfg.ui.enabled && cfg.ui.lan)
@@ -55,6 +56,17 @@ pub fn status(shared: &Shared) -> Value {
             "avg": shared.latency_avg_us.load(Relaxed) as f64 / 1000.0,
             "max": shared.latency_max_us.load(Relaxed) as f64 / 1000.0,
         },
+    })
+}
+
+/// The running Steam game and what the adaptive triggers make of it.
+fn game(shared: &Shared, cfg: &Config) -> Value {
+    let appid = Some(shared.game.load(Relaxed)).filter(|&id| id != 0);
+    let profile = crate::triggers::resolve(cfg.params().trigger_profile, appid, &cfg.games);
+    json!({
+        "appid": appid,
+        "name": appid.and_then(crate::games::name),
+        "trigger_profile": profile,
     })
 }
 

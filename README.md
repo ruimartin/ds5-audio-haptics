@@ -21,6 +21,8 @@ Personal project, early. What has actually been tested:
 | Controller going to sleep and reconnecting | Works |
 | Bazzite desktop | Installs and runs; less play time than the Deck |
 | DualSense Edge | Detected by the code, **never tested** |
+| Adaptive triggers, `shooter` profile | Works on the author's DualSense |
+| Adaptive triggers, `racing` and `generic` profiles, automatic game detection | Written and unit-tested, **not yet tried in a game** |
 | Rumble fallback (`mode = "rumble"`) | Written, **never tested on hardware** |
 | USB connection | Not supported for HD haptics (over USB the controller is a normal audio device) |
 | Following a change of output device (speakers / HDMI / headphones) | Designed for, **not yet verified** |
@@ -52,7 +54,7 @@ everything lives in your home directory:
 
 | Path | What |
 |---|---|
-| `~/.local/bin/ds5-audio-haptics`, `~/.local/bin/ds5-tone` | static binaries |
+| `~/.local/bin/ds5-audio-haptics`, `ds5-tone`, `ds5-trigger` | static binaries |
 | `~/.config/systemd/user/ds5-audio-haptics.service` | user service |
 | `~/.config/ds5-audio-haptics/config.toml` | settings (created on first install, never overwritten) |
 | `~/.local/share/applications/ds5-audio-haptics.desktop` | menu entry for the settings page |
@@ -184,6 +186,40 @@ All keys, with comments, are in [config.example.toml](config.example.toml).
 **Presets.** `game` is punchy: it rejects background music, emphasises impacts and pans.
 `music` follows the bass line faithfully, in mono, with no rejection and lighter pulses.
 
+### Adaptive triggers
+
+Optional and **off by default**, because a game that drives the DualSense's adaptive triggers
+itself would fight with this. Choose a behaviour in the settings page ("Adaptive triggers") or
+with `ds5-audio-haptics set trigger_profile=auto`:
+
+| Profile | R2 | L2 |
+|---|---|---|
+| `shooter` | Gun trigger: a click point with resistance, and a kick on each shot | Free |
+| `racing` | Throttle: light resistance, the faintest kick on bumps | Brake: firm resistance, a moderate kick on bumps |
+| `generic` | Kicks with the haptics, no resistance | Same as R2 |
+| `auto` | `shooter` or `racing` according to the running Steam game, `generic` for anything else | |
+| `off` | Never touched | Never touched |
+
+Kicks come from the same impact detection as the pulses in the grips, and the controller only
+makes them felt while the trigger is held down, so in a shooter it is your own trigger pull
+that kicks. `trigger_resistance` and `trigger_strength` (both 0 to 8) scale the whole profile;
+`trigger_freq_hz = 0` turns the kick from a short buzz into a single push.
+
+**How `auto` knows the game.** It reads the Steam app ID of the running game from Steam's own
+launcher process and looks it up in two built-in lists of popular titles (44 shooters, 35
+racing games, every ID checked against the Steam store; see [src/games.rs](src/games.rs)).
+Add your own under `[games]` in the config file:
+
+```toml
+[games]
+shooter = [1234560]   # the number in the game's store URL
+racing = [1234570]
+```
+
+Things to know: the trigger motors are audible; very fast automatic fire (above roughly 11
+shots a second) skips some shots; and the racing profile reacts to sound, not to the car, so
+"brake feel" is a fixed resistance plus kicks on loud bumps, not real ABS feedback.
+
 ### Known limits
 
 - A game sends music and effects as one mixed stream, so they cannot be truly separated.
@@ -199,8 +235,10 @@ All keys, with comments, are in [config.example.toml](config.example.toml).
 Steam keeps the controller's `hidraw` node open and sends its own reports for the lightbar,
 player LEDs, triggers and rumble. This service coexists with that:
 
-- It only ever sends haptics reports (ID `0x32`) that contain no controller state, so it
+- By default it only sends haptics reports (ID `0x32`) that contain no controller state, so it
   cannot change the lightbar, LEDs, mute light, triggers or volumes.
+- With an adaptive-trigger profile switched on it also sends state reports (ID `0x31`) with
+  only the two trigger flags set: the triggers change, nothing else does.
 - When a game rumbles through Steam Input, the controller plays the rumble instead, and the
   audio haptics come back by themselves the moment the rumble ends. If you prefer audio
   haptics only, turn rumble off for that game in Steam Input.

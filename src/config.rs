@@ -37,6 +37,7 @@ pub struct Config {
     pub dsp: DspOverrides,
     pub output: Output,
     pub ui: Ui,
+    pub games: Games,
 }
 
 impl Default for Config {
@@ -50,6 +51,7 @@ impl Default for Config {
             dsp: DspOverrides::default(),
             output: Output::default(),
             ui: Ui::default(),
+            games: Games::default(),
         }
     }
 }
@@ -86,6 +88,31 @@ impl Default for Output {
     fn default() -> Self {
         Self { buffer_len: 48, idle_stop_secs: 2.0, max_backlog: 3, rumble_rate_hz: 30.0 }
     }
+}
+
+/// Extra Steam app IDs for the adaptive-trigger profiles, on top of the built-in lists.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Games {
+    pub shooter: Vec<u32>,
+    pub racing: Vec<u32>,
+}
+
+/// How the adaptive triggers behave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TriggerProfile {
+    /// Triggers are never touched.
+    #[default]
+    Off,
+    /// Shooter or racing by the running game, generic for anything else.
+    Auto,
+    /// R2 clicks like a gun trigger and kicks on each shot.
+    Shooter,
+    /// L2 resists like a brake pedal, R2 lightly like a throttle; both kick on bumps.
+    Racing,
+    /// Both triggers kick with the haptics, no resistance.
+    Generic,
 }
 
 /// The settings page.
@@ -184,6 +211,19 @@ pub struct Params {
     /// After an onset, background rejection is lifted for about this long, so the
     /// bass body of a gunshot or explosion comes through even over loud music.
     pub transient_open_ms: f32,
+    /// Adaptive triggers. Off by default: a game that drives them itself would conflict.
+    pub trigger_profile: TriggerProfile,
+    /// Resistance at rest, 0 (none) to 8. Each profile scales it per trigger.
+    pub trigger_resistance: f32,
+    /// Kick on each impact, 0 (none) to 8. Felt only while the trigger is pressed.
+    /// Each profile scales it per trigger.
+    pub trigger_strength: f32,
+    /// Vibration pitch of the kick; 0 makes the kick a single push back instead.
+    pub trigger_freq_hz: f32,
+    /// How long each kick lasts.
+    pub trigger_ms: f32,
+    /// Only impacts at least this strong (0..1) kick the trigger.
+    pub trigger_threshold: f32,
 }
 
 macro_rules! overrides {
@@ -210,6 +250,9 @@ overrides! {
     release_ms: f32, makeup_db: f32, ceiling: f32, transient: bool,
     transient_highpass_hz: f32, transient_sensitivity: f32, transient_gain: f32,
     transient_pulse_hz: f32, transient_click_hz: f32, transient_decay_ms: f32, transient_open_ms: f32,
+    trigger_profile: TriggerProfile, trigger_resistance: f32,
+    trigger_strength: f32,
+    trigger_freq_hz: f32, trigger_ms: f32, trigger_threshold: f32,
 }
 
 impl Preset {
@@ -243,6 +286,12 @@ impl Preset {
             transient_click_hz: 200.0,
             transient_decay_ms: 35.0,
             transient_open_ms: 250.0,
+            trigger_profile: TriggerProfile::Off,
+            trigger_resistance: 5.0,
+            trigger_strength: 8.0,
+            trigger_freq_hz: 40.0,
+            trigger_ms: 50.0,
+            trigger_threshold: 0.5,
         };
         match self {
             Preset::Game => game,
@@ -296,6 +345,11 @@ impl Config {
         p.transient_click_hz = p.transient_click_hz.clamp(60.0, 600.0);
         p.transient_decay_ms = p.transient_decay_ms.clamp(5.0, 200.0);
         p.transient_open_ms = p.transient_open_ms.clamp(0.0, 2000.0);
+        p.trigger_resistance = p.trigger_resistance.clamp(0.0, 8.0).round();
+        p.trigger_strength = p.trigger_strength.clamp(0.0, 8.0);
+        p.trigger_freq_hz = p.trigger_freq_hz.clamp(0.0, 200.0);
+        p.trigger_ms = p.trigger_ms.clamp(20.0, 1000.0);
+        p.trigger_threshold = p.trigger_threshold.clamp(0.0, 1.0);
         p
     }
 

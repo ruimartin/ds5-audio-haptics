@@ -5,6 +5,8 @@ Wants=pipewire.service
 
 [Service]
 ExecStart=%h/.local/bin/ds5-audio-haptics run
+# Never leave a trigger vibrating if the service stops in the middle of a kick.
+ExecStopPost=-%h/.local/bin/ds5-trigger --effect off --side both --ms 0
 Restart=on-failure
 RestartSec=2
 

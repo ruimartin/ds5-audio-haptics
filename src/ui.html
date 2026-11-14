@@ -59,6 +59,7 @@ canvas { width: 100%; height: 220px; display: block; border-radius: 8px; backgro
 .row output.changed { color: var(--accent); font-weight: 650; }
 .row .reset { padding: 0; min-height: 30px; width: 34px; border-radius: 6px; visibility: hidden; }
 .row .reset.on { visibility: visible; }
+select { font: inherit; width: 100%; min-height: 40px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
 input[type=range] { width: 100%; height: 30px; accent-color: var(--accent); margin: 0; }
 .toggle { display: flex; align-items: center; gap: 10px; }
 .toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
@@ -140,6 +141,14 @@ const GROUPS = [
     { key: "transient_sensitivity", label: "Sensitivity", help: "lower if music triggers pulses", min: 0, max: 3, step: 0.05 },
     { key: "transient_click_hz", label: "Tick sharpness", help: "pitch for bright sounds", min: 100, max: 400, step: 10, unit: " Hz" },
   ]},
+  { title: "Adaptive triggers", hint: "Resistance and kicks on L2 / R2. Leave off in games that use the adaptive triggers themselves.", note: "game", rows: [
+    { key: "trigger_profile", label: "Behaviour", choices: [["off", "Off"], ["auto", "Automatic (by game)"], ["shooter", "Shooter: gun trigger on R2"], ["racing", "Racing: brake on L2, throttle on R2"], ["generic", "Generic: both kick with the haptics"]] },
+    { key: "trigger_resistance", label: "Resistance", help: "0 = none", min: 0, max: 8, step: 1 },
+    { key: "trigger_strength", label: "Kick strength", help: "0 = no kick", min: 0, max: 8, step: 1 },
+    { key: "trigger_ms", label: "Kick length", min: 20, max: 300, step: 10, unit: " ms" },
+    { key: "trigger_freq_hz", label: "Kick pitch", help: "0 = one push, no buzz", min: 0, max: 100, step: 5, unit: " Hz" },
+    { key: "trigger_threshold", label: "Only for hits above", help: "impact strength", min: 0, max: 1, step: 0.05 },
+  ]},
   { title: "Direction", hint: "Moves the haptics between the grips to follow the sound.", rows: [
     { key: "stereo", label: "Follow left / right", toggle: true },
     { key: "stereo_width", label: "Separation", help: "above 1 exaggerates", min: 0, max: 3, step: 0.1 },
@@ -177,14 +186,17 @@ function format(row, v) {
 // Build the controls once.
 for (const g of GROUPS) {
   const s = document.createElement("section");
-  s.innerHTML = `<h2>${g.title}</h2>` + (g.hint ? `<p class="hint">${g.hint}</p>` : "");
+  s.innerHTML = `<h2>${g.title}</h2>` + (g.hint ? `<p class="hint">${g.hint}</p>` : "") + (g.note ? `<p class="hint" id="note_${g.note}"></p>` : "");
   const box = document.createElement("div");
   if (g.two) { s.classList.add("two"); box.className = "pair"; }
   s.appendChild(box);
   for (const row of g.rows) {
     const d = document.createElement("div"); d.className = "row";
     const help = row.help ? `<small>${row.help}</small>` : "";
-    d.innerHTML = row.toggle
+    d.innerHTML = row.choices
+      ? `<label for="c_${row.key}"><span>${row.label}</span></label>
+         <select id="c_${row.key}" style="grid-column:1/3">${row.choices.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>`
+      : row.toggle
       ? `<div class="toggle" style="grid-column:1/3"><input type="checkbox" id="c_${row.key}"><label for="c_${row.key}" style="font-weight:550">${row.label}</label></div>`
       : `<label for="c_${row.key}"><span>${row.label}</span>${help}</label>
          <input type="range" id="c_${row.key}" min="${row.min}" max="${row.max}" step="${row.step}">
@@ -195,8 +207,10 @@ for (const g of GROUPS) {
     reset.onclick = () => send({ dsp: { [row.key]: null } });
     d.appendChild(reset);
     box.appendChild(d);
-    const input = d.querySelector("input");
-    if (row.toggle) {
+    const input = d.querySelector("input, select");
+    if (row.choices) {
+      input.onchange = () => send({ dsp: { [row.key]: input.value } });
+    } else if (row.toggle) {
       input.onchange = () => send({ dsp: { [row.key]: input.checked } });
     } else {
       input.oninput = () => { dragging = row.key; $("o_" + row.key).textContent = format(row, input.value); queue(row.key, Number(input.value)); };
@@ -225,12 +239,16 @@ function render(s) {
   for (const g of GROUPS) for (const row of g.rows) {
     const input = $("c_" + row.key), v = s.params[row.key], changed = row.key in s.overrides;
     $("r_" + row.key).classList.toggle("on", changed);
+    if (row.choices) { input.value = v; continue; }
     if (row.toggle) { input.checked = v; continue; }
     if (dragging !== row.key) input.value = v;
     const out = $("o_" + row.key);
     out.textContent = format(row, dragging === row.key ? input.value : v);
     out.classList.toggle("changed", changed);
   }
+  const g = s.game, auto = s.params.trigger_profile === "auto";
+  $("note_game").textContent = !g.appid ? "No Steam game running." + (auto ? " Using: generic." : "")
+    : "Running: " + (g.name || "an unlisted game (app " + g.appid + ")") + "." + (auto ? " Using: " + g.trigger_profile + "." : "");
   drawCurve();
 }
 function renderDevice(output, capture) {

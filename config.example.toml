@@ -44,6 +44,19 @@
 # transient_click_hz = 200      # pulse pitch for bright hits (menu blips, clicks)
 # transient_decay_ms = 35
 # transient_open_ms = 250       # after a hit, let its bass through at full strength this long
+# trigger_profile = "off"       # adaptive triggers: off | auto | shooter | racing | generic
+                                #   shooter: gun-trigger click on R2, kick on each shot
+                                #   racing:  firm brake on L2, light throttle on R2, kicks on bumps
+                                #   generic: both triggers kick with the haptics
+                                #   auto:    shooter / racing by the running Steam game,
+                                #            generic for anything else
+                                # Off by default: conflicts with games that drive the
+                                # triggers themselves
+# trigger_resistance = 5        # resistance at rest, 0 (none) .. 8
+# trigger_strength = 8          # kick on each impact, 0 (none) .. 8; felt while held
+# trigger_freq_hz = 40          # 0 = the kick is a single push back instead of a buzz
+# trigger_ms = 50               # length of each kick
+# trigger_threshold = 0.5       # only impacts at least this strong (0..1)
 
 [ui]
 # enabled = true         # settings page at http://127.0.0.1:5757 (this machine only)
@@ -58,3 +71,10 @@
 # idle_stop_secs = 2.0    # stop transmitting after this much silence
 # max_backlog = 3         # reports that may queue before old ones are dropped
 # rumble_rate_hz = 30     # update rate of the rumble fallback
+
+[games]
+# Steam app IDs to treat as shooters or racing games under trigger_profile = "auto",
+# in addition to the built-in lists (see src/games.rs). The ID is the number in the
+# game's store URL.
+# shooter = [1234560]
+# racing = [1234570]

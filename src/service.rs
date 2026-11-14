@@ -8,13 +8,14 @@ use crate::capture::Capture;
 use crate::config::{Config, Mode};
 use crate::device::{self, Bus};
 use crate::dsp::{Meter, Processor};
-use crate::protocol::{ControlForm, ReportBuilder, PAYLOAD, REPORT_PERIOD_NS};
+use crate::protocol::{trigger_report, ControlForm, ReportBuilder, TriggerEffect, PAYLOAD, REPORT_PERIOD_NS};
 use crate::rumble::{self, Rumble};
+use crate::triggers;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -29,6 +30,8 @@ pub struct Shared {
     /// False while no controller is usable; audio capture is stopped meanwhile.
     pub sink_present: AtomicBool,
     pub capture: Mutex<String>,
+    /// Steam app ID of the running game, 0 when none.
+    pub game: AtomicU32,
     started: Instant,
     /// When the settings page last asked for levels (ms since start, 0 = never).
     meter_seen_ms: AtomicU64,
@@ -51,6 +54,7 @@ impl Shared {
             sink: Mutex::new("none".into()),
             sink_present: AtomicBool::new(false),
             capture: Mutex::new("stopped".into()),
+            game: AtomicU32::new(0),
             started: Instant::now(),
             meter_seen_ms: AtomicU64::new(0),
             meter: Mutex::new(Meter { floor_db: -90.0, ..Default::default() }),
@@ -101,6 +105,8 @@ impl Shared {
 struct Frame {
     samples: [i8; PAYLOAD],
     rumble: (f32, f32),
+    /// Strongest impact detected in this stretch of audio, 0..1.
+    onset: f32,
     /// When the audio that completed this frame reached us.
     born: Instant,
 }
@@ -114,6 +120,14 @@ pub fn run(shared: Arc<Shared>) -> ! {
             .name("output".into())
             .spawn(move || output_loop(&shared, rx))
             .expect("spawn output thread");
+    }
+    {
+        // Notice which game is running, for the adaptive-trigger profiles.
+        let shared = shared.clone();
+        let _ = std::thread::Builder::new().name("games".into()).spawn(move || loop {
+            shared.game.store(crate::games::running_appid().unwrap_or(0), Relaxed);
+            std::thread::sleep(Duration::from_secs(3));
+        });
     }
     loop {
         capture_loop(&shared, &tx);
@@ -177,8 +191,10 @@ fn capture_loop(shared: &Shared, tx: &SyncSender<Frame>) {
         }
 
         dsp.process(&audio, &mut pending);
+        let mut chunk_onset;
         {
             let new = dsp.take_meter();
+            chunk_onset = new.onset;
             let mut m = shared.meter.lock().unwrap();
             m.volume = m.volume.max(new.volume);
             m.bass = m.bass.max(new.bass);
@@ -191,6 +207,8 @@ fn capture_loop(shared: &Shared, tx: &SyncSender<Frame>) {
             let frame = Frame {
                 samples: chunk.try_into().unwrap(),
                 rumble: dsp.rumble_levels(),
+                // The impact belongs to the first frame cut from this chunk.
+                onset: std::mem::take(&mut chunk_onset),
                 born,
             };
             // A full channel means the output thread is stuck; dropping is right.
@@ -259,10 +277,23 @@ fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
     let mut last_send = Instant::now() - period;
     let mut last_active = Instant::now();
     let mut queue: VecDeque<Frame> = VecDeque::new();
+    let mut params = cfg.params();
+    // Adaptive-trigger kick in progress: when to switch it off.
+    let mut kick: Option<Instant> = None;
+    let mut state_seq = 0u8;
+    // What was last decided for the triggers at rest (inner None = left alone), and when.
+    let mut resting: Option<Option<(TriggerEffect, TriggerEffect)>> = None;
+    let mut resting_at = Instant::now();
+    let mut kick_ended = Instant::now();
 
     loop {
         if queue.is_empty() {
-            match rx.recv_timeout(Duration::from_secs(2)) {
+            // While a kick is on, wake up in time to end it even if audio stops.
+            let wait = match kick {
+                Some(until) => until.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)),
+                None => Duration::from_secs(2),
+            };
+            match rx.recv_timeout(wait) {
                 Ok(f) => queue.push_back(f),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -286,6 +317,7 @@ fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
                 next_probe = Instant::now();
             }
             cfg = new;
+            params = cfg.params();
         }
 
         // Look for a controller when we have none, and for a way back from the
@@ -296,6 +328,55 @@ fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
             if !fallback || open_hd(&cfg).is_ok() {
                 sink = open_sink(shared, &cfg);
             }
+        }
+
+        // Adaptive triggers: a resting feel per trigger, and a short kick on each
+        // strong impact (the controller only makes that felt while the trigger is held).
+        if let Sink::Hd { file, .. } = &mut sink {
+            let mut set = |right: TriggerEffect, left: TriggerEffect| {
+                state_seq = state_seq.wrapping_add(1);
+                let _ = file.write(&trigger_report(state_seq, Some(right), Some(left)));
+            };
+            let appid = Some(shared.game.load(Relaxed)).filter(|&id| id != 0);
+            let profile = triggers::resolve(params.trigger_profile, appid, &cfg.games);
+            let plan = triggers::plan(profile, &params).filter(|_| cfg.enabled);
+
+            if kick.is_some_and(|until| Instant::now() >= until) || (kick.is_some() && plan.is_none()) {
+                kick = None;
+                kick_ended = Instant::now();
+                resting = None; // fall through to restoring the resting feel
+            }
+            if let (Some(plan), Some(frame)) = (plan, queue.front()) {
+                // One kick per impact, always the same strength and length, with a
+                // pause before the next: separate thumps instead of a wavering buzz.
+                let rested = kick_ended.elapsed() >= Duration::from_millis(40);
+                let wanted = plan.right.kick > 0 || plan.left.kick > 0;
+                if wanted && kick.is_none() && rested && frame.onset >= params.trigger_threshold.max(0.01) {
+                    let pulse = |side: triggers::Side| match (side.kick, params.trigger_freq_hz as u8) {
+                        (0, _) => side.rest,
+                        (level, 0) => TriggerEffect::feedback(0, level), // a single push back
+                        (level, hz) => TriggerEffect::vibration(0, level, hz),
+                    };
+                    set(pulse(plan.right), pulse(plan.left));
+                    kick = Some(Instant::now() + Duration::from_millis(params.trigger_ms as u64));
+                }
+            }
+            // Write the resting feel when it changed, after a kick, and now and then
+            // in case something else reset the triggers. With the feature off they
+            // are released once and then never touched.
+            let rest = plan.map(|p| (p.right.rest, p.left.rest));
+            let stale = rest.is_some() && resting_at.elapsed() > Duration::from_secs(5);
+            if kick.is_none() && (resting != Some(rest) || stale) {
+                if rest.is_some() || resting.is_some_and(|r| r.is_some()) {
+                    let (right, left) = rest.unwrap_or((TriggerEffect::OFF, TriggerEffect::OFF));
+                    set(right, left);
+                }
+                resting = Some(rest);
+                resting_at = Instant::now();
+            }
+        } else {
+            kick = None;
+            resting = None;
         }
 
         let Some(frame) = queue.pop_front() else { continue };

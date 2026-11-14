@@ -13,7 +13,7 @@ apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 
 if [ "${1:-}" = uninstall ]; then
     systemctl --user disable --now ds5-audio-haptics.service 2>/dev/null || true
-    rm -f "$units/ds5-audio-haptics.service" "$bin/ds5-audio-haptics" "$bin/ds5-tone" \
+    rm -f "$units/ds5-audio-haptics.service" "$bin/ds5-audio-haptics" "$bin/ds5-tone" "$bin/ds5-trigger" \
         "$apps/ds5-audio-haptics.desktop"
     systemctl --user daemon-reload
     echo "removed (config kept in $conf)"
@@ -22,7 +22,7 @@ fi
 
 mkdir -p "$bin" "$units" "$conf" "$apps"
 systemctl --user stop ds5-audio-haptics.service 2>/dev/null || true
-install -m 755 "$here/ds5-audio-haptics" "$here/ds5-tone" "$bin/"
+install -m 755 "$here/ds5-audio-haptics" "$here/ds5-tone" "$here/ds5-trigger" "$bin/"
 install -m 644 "$here/ds5-audio-haptics.service" "$units/"
 [ -e "$conf/config.toml" ] || install -m 644 "$here/config.example.toml" "$conf/config.toml"
 # Launcher for the settings page (application menu, "DualSense Audio Haptics").

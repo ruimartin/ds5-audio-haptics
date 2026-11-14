@@ -266,3 +266,29 @@ Tested with `ds5-tone`; "felt" results are the user's reports.
 Design note from E3: stereo haptics only carry useful left/right information above roughly
 100 Hz. The sub-bass band should be sent to both sides; any stereo split belongs in the
 low-mid and transient bands.
+
+## 12. Adaptive triggers (optional feature)
+
+Trigger effects live in the SetStateData block of report 0x31 (78 bytes: ID, sequence nibble,
+tag `0x10`, 47-byte state, padding, CRC). Flag0 bit 2 enables the right trigger field (11 bytes
+at state offset 10), bit 3 the left one (offset 21). With only those bits set nothing else in
+the controller changes **[src kernel, dualsensectl; dev: lightbar unaffected]**.
+
+Effects used, encodings from Nielk1's trigger effect documentation (MIT):
+
+| Mode | Effect | Parameters |
+|---|---|---|
+| `0x05` | off | |
+| `0x21` | feedback (steady resistance) | zone bitmask u16, 3-bit strength per zone |
+| `0x25` | weapon (click point) | start/end zone bitmask u16, strength |
+| `0x26` | vibration | zone bitmask u16, 3-bit amplitude per zone, frequency in byte 9 |
+
+Hardware results (2026-11-14, DualSense 0CE6 over BT, Steam running):
+
+- Vibration is felt only while the trigger is pressed; nothing at rest.
+- 100 ms and 40 ms pulses are both felt as distinct kicks; 40 ms pulses 100 ms apart stay distinct.
+- A steady effect held for 6 s was not interrupted by Steam.
+- The weapon effect gives a click in mid-travel with light resistance.
+- The trigger motor is clearly audible.
+- Extending one vibration across consecutive shots feels like an erratic buzz; one fixed-length
+  kick per impact with a pause between feels right.
