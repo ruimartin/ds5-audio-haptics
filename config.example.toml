@@ -1,0 +1,50 @@
+# ds5-audio-haptics configuration
+# Location: ~/.config/ds5-audio-haptics/config.toml
+# Every key is optional. Commented values are the defaults.
+
+# enabled = true
+# mode = "auto"       # auto: HD haptics, rumble if HD is unavailable | hd | rumble
+# preset = "game"     # game: punchy, lifts quiet rumble, adds impact pulses
+                      # music: follows the bass line, gentler dynamics
+# device = ""         # controller MAC address; empty = first Bluetooth DualSense
+
+[capture]
+# target = ""             # PipeWire node name; empty = follow the default output
+# latency_frames = 256    # requested capture latency at 48 kHz (256 = 5.3 ms)
+
+[dsp]
+# Keys set here override the preset. Values shown are the "game" preset.
+# intensity = 1.0               # master gain, 0..4
+# stereo = true                 # pan haptics between the grips following the stereo image
+# stereo_width = 1.5            # 0 = no panning, 1 = proportional, 2+ = exaggerated
+# lowpass_hz = 150              # main band upper edge (4th-order low-pass)
+# highpass_hz = 20              # removes DC and inaudible drift
+# bass_boost_db = 6             # extra strength below bass_boost_hz
+# bass_boost_hz = 70
+# background_reject = 0.9       # 0..1: turn down steady sound (music, drones) so that
+                                # sounds standing out from it dominate; 0 = off
+# background_rise_db_s = 3      # how fast sustained sound becomes "background" (dB per second);
+                                # lower keeps long firefights strong, higher fades music sooner
+# background_fall_ms = 1000     # how quickly the estimate drops when things go quiet
+# gate_db = -48                 # mute below this level
+# curve = 0.85                  # below 1 lifts quiet content, 1 = linear
+# comp_threshold_db = -6        # compressor
+# comp_ratio = 2.0
+# attack_ms = 4
+# release_ms = 120
+# makeup_db = 8
+# ceiling = 1.0                 # output limit, fraction of full scale
+# transient = true              # add a short pulse on gunshots and impacts
+# transient_highpass_hz = 300   # onsets are detected above this frequency
+# transient_sensitivity = 1.0
+# transient_gain = 0.85
+# transient_pulse_hz = 90       # pulse pitch for dull hits (thuds, explosions)
+# transient_click_hz = 200      # pulse pitch for bright hits (menu blips, clicks)
+# transient_decay_ms = 35
+# transient_open_ms = 250       # after a hit, let its bass through at full strength this long
+
+[output]
+# buffer_len = 48         # controller buffer hint (16..127), effect unmeasured
+# idle_stop_secs = 2.0    # stop transmitting after this much silence
+# max_backlog = 3         # reports that may queue before old ones are dropped
+# rumble_rate_hz = 30     # update rate of the rumble fallback

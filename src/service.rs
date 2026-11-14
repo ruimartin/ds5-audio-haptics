@@ -1,0 +1,328 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+//! The running service: capture -> DSP on one thread, paced output on another.
+
+use crate::capture::Capture;
+use crate::config::{Config, Mode};
+use crate::device::{self, Bus};
+use crate::dsp::Processor;
+use crate::protocol::{ControlForm, ReportBuilder, PAYLOAD, REPORT_PERIOD_NS};
+use crate::rumble::{self, Rumble};
+use std::collections::VecDeque;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// State shared between the DSP thread, the output thread and the control socket.
+pub struct Shared {
+    pub config: Mutex<Config>,
+    pub config_path: PathBuf,
+    /// Bumped on every config change so threads know to re-read it.
+    pub generation: AtomicU64,
+    pub sink: Mutex<String>,
+    /// False while no controller is usable; audio capture is stopped meanwhile.
+    pub sink_present: AtomicBool,
+    pub capture: Mutex<String>,
+    pub reports_sent: AtomicU64,
+    pub reports_dropped: AtomicU64,
+    pub write_errors: AtomicU64,
+    /// Microseconds from audio arriving in this process to the hidraw write.
+    pub latency_avg_us: AtomicU64,
+    pub latency_max_us: AtomicU64,
+}
+
+impl Shared {
+    pub fn new(config: Config, config_path: PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            config: Mutex::new(config),
+            config_path,
+            generation: AtomicU64::new(1),
+            sink: Mutex::new("none".into()),
+            sink_present: AtomicBool::new(false),
+            capture: Mutex::new("stopped".into()),
+            reports_sent: AtomicU64::new(0),
+            reports_dropped: AtomicU64::new(0),
+            write_errors: AtomicU64::new(0),
+            latency_avg_us: AtomicU64::new(0),
+            latency_max_us: AtomicU64::new(0),
+        })
+    }
+
+    pub fn config(&self) -> Config {
+        self.config.lock().unwrap().clone()
+    }
+
+    fn set_sink(&self, text: String) {
+        self.sink_present.store(!text.starts_with("none"), Relaxed);
+        let mut s = self.sink.lock().unwrap();
+        if *s != text {
+            eprintln!("output: {text}");
+            *s = text;
+        }
+    }
+
+    fn set_capture(&self, text: &str) {
+        let mut s = self.capture.lock().unwrap();
+        if *s != text {
+            eprintln!("capture: {text}");
+            *s = text.into();
+        }
+    }
+}
+
+/// 10.67 ms of haptics plus what the rumble fallback needs.
+struct Frame {
+    samples: [i8; PAYLOAD],
+    rumble: (f32, f32),
+    /// When the audio that completed this frame reached us.
+    born: Instant,
+}
+
+/// Runs forever. Spawns the output thread and does capture + DSP on the caller's.
+pub fn run(shared: Arc<Shared>) -> ! {
+    let (tx, rx) = mpsc::sync_channel::<Frame>(16);
+    {
+        let shared = shared.clone();
+        std::thread::Builder::new()
+            .name("output".into())
+            .spawn(move || output_loop(&shared, rx))
+            .expect("spawn output thread");
+    }
+    loop {
+        capture_loop(&shared, &tx);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// One capture session. Returns when it ends, fails or the service is disabled.
+fn capture_loop(shared: &Shared, tx: &SyncSender<Frame>) {
+    let mut generation = shared.generation.load(Relaxed);
+    let mut cfg = shared.config();
+    if !cfg.enabled {
+        shared.set_capture("disabled");
+        while shared.generation.load(Relaxed) == generation {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        return;
+    }
+    if !shared.sink_present.load(Relaxed) {
+        // No controller: do not keep an audio stream open for nothing.
+        shared.set_capture("waiting for a controller");
+        while !shared.sink_present.load(Relaxed) && shared.generation.load(Relaxed) == generation {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        return;
+    }
+    let mut capture = match Capture::spawn(&cfg.capture) {
+        Ok(c) => c,
+        Err(e) => {
+            shared.set_capture(&format!("cannot run pw-record: {e}"));
+            return;
+        }
+    };
+    shared.set_capture("running");
+
+    let mut dsp = Processor::new(&cfg.params());
+    let mut audio = Vec::new();
+    let mut pending: Vec<i8> = Vec::new();
+    loop {
+        match capture.read(&mut audio) {
+            Ok(true) => {}
+            Ok(false) => return shared.set_capture("pw-record exited, restarting"),
+            Err(e) => return shared.set_capture(&format!("read error: {e}")),
+        }
+        let born = Instant::now();
+        if !shared.sink_present.load(Relaxed) {
+            return;
+        }
+
+        let now = shared.generation.load(Relaxed);
+        if now != generation {
+            generation = now;
+            let new = shared.config();
+            if !new.enabled || new.capture.target != cfg.capture.target
+                || new.capture.latency_frames != cfg.capture.latency_frames
+            {
+                return; // restart with the new capture settings
+            }
+            dsp.set_params(&new.params());
+            cfg = new;
+        }
+
+        dsp.process(&audio, &mut pending);
+        let mut used = 0;
+        for chunk in pending.chunks_exact(PAYLOAD) {
+            let frame = Frame {
+                samples: chunk.try_into().unwrap(),
+                rumble: dsp.rumble_levels(),
+                born,
+            };
+            // A full channel means the output thread is stuck; dropping is right.
+            if tx.try_send(frame).is_err() {
+                shared.reports_dropped.fetch_add(1, Relaxed);
+            }
+            used += PAYLOAD;
+        }
+        pending.drain(..used);
+    }
+}
+
+enum Sink {
+    None,
+    Hd { file: File, builder: ReportBuilder },
+    Rumble { dev: Rumble, last: Instant },
+}
+
+fn open_hd(cfg: &Config) -> Result<(File, String), String> {
+    let all = device::scan();
+    let c = all
+        .iter()
+        .filter(|c| c.bus == Bus::Bluetooth)
+        .find(|c| cfg.device.is_empty() || c.uniq.eq_ignore_ascii_case(&cfg.device))
+        .ok_or("no Bluetooth DualSense")?;
+    let file = OpenOptions::new()
+        .write(true)
+        .open(&c.hidraw)
+        .map_err(|e| format!("{}: {e}", c.hidraw.display()))?;
+    Ok((file, format!("hd {} {} ({})", c.hidraw.display(), c.name, c.uniq)))
+}
+
+fn open_sink(shared: &Shared, cfg: &Config) -> Sink {
+    let mut why = String::new();
+    if cfg.mode != Mode::Rumble {
+        match open_hd(cfg) {
+            Ok((file, text)) => {
+                shared.set_sink(text);
+                let builder = ReportBuilder::new(ControlForm::Awalol, cfg.output.buffer_len.clamp(16, 127));
+                return Sink::Hd { file, builder };
+            }
+            Err(e) => why = e,
+        }
+    }
+    if cfg.mode != Mode::Hd {
+        for path in rumble::scan() {
+            match Rumble::open(path.clone()) {
+                Ok(dev) => {
+                    shared.set_sink(format!("rumble {} (fallback: {why})", path.display()));
+                    return Sink::Rumble { dev, last: Instant::now() };
+                }
+                Err(e) => why = format!("{why}; {}: {e}", path.display()),
+            }
+        }
+    }
+    shared.set_sink(format!("none ({})", if why.is_empty() { "no controller" } else { &why }));
+    Sink::None
+}
+
+fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
+    let period = Duration::from_nanos(REPORT_PERIOD_NS);
+    let mut cfg = shared.config();
+    let mut generation = shared.generation.load(Relaxed);
+    let mut sink = Sink::None;
+    let mut next_probe = Instant::now();
+    let mut last_send = Instant::now() - period;
+    let mut last_active = Instant::now();
+    let mut queue: VecDeque<Frame> = VecDeque::new();
+
+    loop {
+        if queue.is_empty() {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(f) => queue.push_back(f),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+        queue.extend(rx.try_iter());
+        // Bound the delay: when behind, skip to the newest audio.
+        while queue.len() > cfg.output.max_backlog.max(1) {
+            queue.pop_front();
+            shared.reports_dropped.fetch_add(1, Relaxed);
+        }
+
+        let now = shared.generation.load(Relaxed);
+        if now != generation {
+            generation = now;
+            let new = shared.config();
+            if new.mode != cfg.mode || new.device != cfg.device
+                || new.output.buffer_len != cfg.output.buffer_len
+            {
+                sink = Sink::None;
+                next_probe = Instant::now();
+            }
+            cfg = new;
+        }
+
+        // Look for a controller when we have none, and for a way back from the
+        // rumble fallback to HD.
+        let fallback = matches!(sink, Sink::Rumble { .. }) && cfg.mode == Mode::Auto;
+        if (matches!(sink, Sink::None) || fallback) && Instant::now() >= next_probe {
+            next_probe = Instant::now() + Duration::from_secs(2);
+            if !fallback || open_hd(&cfg).is_ok() {
+                sink = open_sink(shared, &cfg);
+            }
+        }
+
+        let Some(frame) = queue.pop_front() else { continue };
+
+        // After a stretch of silence stop transmitting: saves battery and radio time.
+        let silent = frame.samples.iter().all(|&s| s == 0);
+        if !silent {
+            last_active = Instant::now();
+        }
+        if last_active.elapsed().as_secs_f32() > cfg.output.idle_stop_secs {
+            continue;
+        }
+
+        match &mut sink {
+            Sink::None => {}
+            Sink::Hd { file, builder } => {
+                // Audio arrives in bursts when the graph quantum exceeds one report;
+                // space the writes so the controller gets an even stream.
+                let earliest = last_send + period - Duration::from_millis(1);
+                let wait = earliest.saturating_duration_since(Instant::now());
+                if !wait.is_zero() {
+                    std::thread::sleep(wait);
+                }
+                let report = builder.build(&frame.samples);
+                match file.write(&report) {
+                    Ok(n) if n == report.len() => {
+                        last_send = Instant::now();
+                        shared.reports_sent.fetch_add(1, Relaxed);
+                        let us = frame.born.elapsed().as_micros() as u64;
+                        let avg = shared.latency_avg_us.load(Relaxed);
+                        // Exponential average over about 100 reports (1 s).
+                        let avg = if avg == 0 { us } else { (avg * 99 + us) / 100 };
+                        shared.latency_avg_us.store(avg, Relaxed);
+                        shared.latency_max_us.fetch_max(us, Relaxed);
+                    }
+                    other => {
+                        shared.write_errors.fetch_add(1, Relaxed);
+                        shared.set_sink(format!("none (write failed: {other:?})"));
+                        sink = Sink::None;
+                        next_probe = Instant::now() + Duration::from_secs(1);
+                    }
+                }
+            }
+            Sink::Rumble { dev, last } => {
+                let interval = Duration::from_secs_f32(1.0 / cfg.output.rumble_rate_hz.clamp(5.0, 90.0));
+                if last.elapsed() >= interval {
+                    *last = Instant::now();
+                    let (sub, mid) = if silent { (0.0, 0.0) } else { frame.rumble };
+                    // Left (heavy) motor takes sub-bass, right (light) motor low-mids.
+                    if let Err(e) = dev.set(sub, mid) {
+                        shared.write_errors.fetch_add(1, Relaxed);
+                        shared.set_sink(format!("none (rumble failed: {e})"));
+                        sink = Sink::None;
+                        next_probe = Instant::now() + Duration::from_secs(1);
+                    }
+                }
+            }
+        }
+    }
+}
