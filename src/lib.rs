@@ -11,6 +11,7 @@ pub mod capture;
 pub mod config;
 pub mod control;
 pub mod device;
+pub mod mdns;
 pub mod dsp;
 pub mod protocol;
 pub mod rumble;

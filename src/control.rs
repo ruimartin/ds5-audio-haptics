@@ -39,6 +39,8 @@ pub fn status(shared: &Shared) -> Value {
         "response_curve": response_curve(&params),
         "ui": cfg.ui.enabled.then(|| format!("http://127.0.0.1:{}/", cfg.ui.port)),
         "lan": cfg.ui.lan,
+        "ui_name": (cfg.ui.enabled && cfg.ui.lan)
+            .then(|| format!("http://{}:{}/", cfg.ui.mdns_host(), cfg.ui.port)),
         "ui_lan": (cfg.ui.enabled && cfg.ui.lan)
             .then(crate::web::lan_address)
             .flatten()

@@ -219,7 +219,9 @@ function render(s) {
   $(s.enabled ? "en1" : "en0").checked = true;
   $(s.preset === "music" ? "pm" : "pg").checked = true;
   $("lan").checked = s.lan;
-  $("lanUrl").textContent = s.lan ? (s.ui_lan ? "— open " + s.ui_lan + " on your phone. No password: anyone on your network can change these settings." : "— no network address found") : "(for example from your phone while you play)";
+  $("lanUrl").textContent = s.lan
+    ? "— open " + s.ui_name + (s.ui_lan ? " (or " + s.ui_lan + ")" : "") + " on your phone. No password: anyone on your network can change these settings."
+    : "(for example from your phone while you play)";
   for (const g of GROUPS) for (const row of g.rows) {
     const input = $("c_" + row.key), v = s.params[row.key], changed = row.key in s.overrides;
     $("r_" + row.key).classList.toggle("on", changed);

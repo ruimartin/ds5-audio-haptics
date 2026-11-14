@@ -62,13 +62,15 @@ fn read_request(stream: &TcpStream) -> Option<Request> {
 /// True when the request addresses this server by `localhost` or, in LAN mode, by
 /// an IP address, and any `Origin` is that same address. A web site elsewhere can
 /// only reach us through the user's browser under its own name (cross-site request
-/// or DNS rebinding), and a name is never accepted.
-fn is_local(req: &Request, port: u16, lan: bool) -> bool {
+/// or DNS rebinding), and no name but our own `.local` one is ever accepted.
+fn is_local(req: &Request, port: u16, lan: bool, mdns: &str) -> bool {
     let Some((name, p)) = req.host.rsplit_once(':') else { return false };
     if p.parse() != Ok(port) {
         return false;
     }
+    // Our own .local name is fine too: it only resolves on the local network.
     let known = name == "localhost"
+        || (lan && name.eq_ignore_ascii_case(mdns))
         || name.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback() || (lan && ip.is_private()));
     known && req.origin.as_ref().map_or(true, |o| *o == format!("http://{}", req.host))
 }
@@ -102,7 +104,7 @@ fn respond(mut stream: &TcpStream, status: &str, kind: &str, body: &[u8]) {
     let _ = stream.write_all(body);
 }
 
-fn serve(shared: &Shared, stream: TcpStream, port: u16, lan: bool) {
+fn serve(shared: &Shared, stream: TcpStream, port: u16, lan: bool, mdns: &str) {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     if !stream.peer_addr().is_ok_and(|p| peer_allowed(p, lan)) {
@@ -111,7 +113,7 @@ fn serve(shared: &Shared, stream: TcpStream, port: u16, lan: bool) {
     let Some(req) = read_request(&stream) else {
         return respond(&stream, "400 Bad Request", "text/plain", b"bad request");
     };
-    if !is_local(&req, port, lan) {
+    if !is_local(&req, port, lan, mdns) {
         return respond(&stream, "403 Forbidden", "text/plain", b"forbidden");
     }
     match (req.method.as_str(), req.path.as_str()) {
@@ -148,9 +150,10 @@ fn listen(shared: &Arc<Shared>, port: u16, lan: bool) {
         match listener.accept() {
             Ok((stream, _)) => {
                 let shared = shared.clone();
+                let mdns = shared.config.lock().unwrap().ui.mdns_host();
                 let _ = std::thread::Builder::new()
                     .name("web-client".into())
-                    .spawn(move || serve(&shared, stream, port, lan));
+                    .spawn(move || serve(&shared, stream, port, lan, &mdns));
             }
             Err(_) => {
                 if shared.config.lock().unwrap().ui.lan != lan {
@@ -190,19 +193,19 @@ mod tests {
 
     #[test]
     fn local_mode_accepts_only_this_machine() {
-        assert!(is_local(&req("127.0.0.1:5757", None), 5757, false));
-        assert!(is_local(&req("localhost:5757", Some("http://localhost:5757")), 5757, false));
-        assert!(!is_local(&req("192.168.1.20:5757", None), 5757, false));
+        assert!(is_local(&req("127.0.0.1:5757", None), 5757, false, "dsconfig.local"));
+        assert!(is_local(&req("localhost:5757", Some("http://localhost:5757")), 5757, false, "dsconfig.local"));
+        assert!(!is_local(&req("192.168.1.20:5757", None), 5757, false, "dsconfig.local"));
         assert!(!peer_allowed("192.168.1.30:4000".parse().unwrap(), false));
         assert!(peer_allowed("127.0.0.1:4000".parse().unwrap(), false));
     }
 
     #[test]
     fn lan_mode_accepts_private_addresses_only() {
-        assert!(is_local(&req("192.168.1.20:5757", None), 5757, true));
-        assert!(is_local(&req("10.0.0.5:5757", Some("http://10.0.0.5:5757")), 5757, true));
-        assert!(is_local(&req("127.0.0.1:5757", None), 5757, true));
-        assert!(!is_local(&req("8.8.8.8:5757", None), 5757, true));
+        assert!(is_local(&req("192.168.1.20:5757", None), 5757, true, "dsconfig.local"));
+        assert!(is_local(&req("10.0.0.5:5757", Some("http://10.0.0.5:5757")), 5757, true, "dsconfig.local"));
+        assert!(is_local(&req("127.0.0.1:5757", None), 5757, true, "dsconfig.local"));
+        assert!(!is_local(&req("8.8.8.8:5757", None), 5757, true, "dsconfig.local"));
         assert!(peer_allowed("192.168.1.30:4000".parse().unwrap(), true));
         assert!(peer_allowed("10.1.2.3:4000".parse().unwrap(), true));
         assert!(!peer_allowed("8.8.8.8:4000".parse().unwrap(), true));
@@ -210,17 +213,26 @@ mod tests {
     }
 
     #[test]
+    fn own_local_name_only_in_lan_mode() {
+        let named = req("dsconfig.local:5757", Some("http://dsconfig.local:5757"));
+        assert!(is_local(&named, 5757, true, "dsconfig.local"));
+        assert!(is_local(&req("DSConfig.local:5757", None), 5757, true, "dsconfig.local"));
+        assert!(!is_local(&named, 5757, false, "dsconfig.local"));
+        assert!(!is_local(&req("other.local:5757", None), 5757, true, "dsconfig.local"));
+    }
+
+    #[test]
     fn refuses_other_sites_and_rebinding_in_both_modes() {
         for lan in [false, true] {
             // Cross-site request from a page on another origin.
-            assert!(!is_local(&req("127.0.0.1:5757", Some("https://evil.example")), 5757, lan));
-            assert!(!is_local(&req("192.168.1.20:5757", Some("https://evil.example")), 5757, lan));
+            assert!(!is_local(&req("127.0.0.1:5757", Some("https://evil.example")), 5757, lan, "dsconfig.local"));
+            assert!(!is_local(&req("192.168.1.20:5757", Some("https://evil.example")), 5757, lan, "dsconfig.local"));
             // DNS rebinding: the browser sends the attacker's host name.
-            assert!(!is_local(&req("evil.example:5757", None), 5757, lan));
-            assert!(!is_local(&req("evil.example:5757", Some("http://evil.example:5757")), 5757, lan));
-            assert!(!is_local(&req("127.0.0.1:9999", None), 5757, lan));
-            assert!(!is_local(&req("127.0.0.1:5757", Some("http://127.0.0.1:9999")), 5757, lan));
-            assert!(!is_local(&req("", None), 5757, lan));
+            assert!(!is_local(&req("evil.example:5757", None), 5757, lan, "dsconfig.local"));
+            assert!(!is_local(&req("evil.example:5757", Some("http://evil.example:5757")), 5757, lan, "dsconfig.local"));
+            assert!(!is_local(&req("127.0.0.1:9999", None), 5757, lan, "dsconfig.local"));
+            assert!(!is_local(&req("127.0.0.1:5757", Some("http://127.0.0.1:9999")), 5757, lan, "dsconfig.local"));
+            assert!(!is_local(&req("", None), 5757, lan, "dsconfig.local"));
         }
     }
 }

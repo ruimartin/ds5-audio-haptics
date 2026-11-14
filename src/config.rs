@@ -97,11 +97,39 @@ pub struct Ui {
     /// false: reachable from this machine only. true: also from other devices on the
     /// local network (phone, laptop), without a password.
     pub lan: bool,
+    /// Name under which the page is announced on the local network (without
+    /// `.local`). Empty picks `dsconfig-<hostname>`, unique per machine.
+    pub mdns_name: String,
 }
 
 impl Default for Ui {
     fn default() -> Self {
-        Self { enabled: true, port: 5757, lan: false }
+        Self { enabled: true, port: 5757, lan: false, mdns_name: String::new() }
+    }
+}
+
+impl Ui {
+    /// The full `.local` host name, lower case, safe as a DNS label.
+    pub fn mdns_host(&self) -> String {
+        let clean = |text: &str| -> String {
+            let s: String = text
+                .trim()
+                .trim_end_matches(".local")
+                .to_ascii_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            s.trim_matches('-').chars().take(60).collect()
+        };
+        let mut label = clean(&self.mdns_name);
+        if label.is_empty() {
+            let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+            label = match clean(&host).as_str() {
+                "" => "dsconfig".to_string(),
+                h => format!("dsconfig-{h}"),
+            };
+        }
+        format!("{label}.local")
     }
 }
 
@@ -322,6 +350,16 @@ mod tests {
     #[test]
     fn unknown_keys_are_rejected() {
         assert!(toml::from_str::<Config>("[dsp]\nlowpas_hz = 100\n").is_err());
+    }
+
+    #[test]
+    fn mdns_name_is_sanitised() {
+        let ui = |name: &str| Ui { mdns_name: name.into(), ..Ui::default() }.mdns_host();
+        assert_eq!(ui("dsconfig"), "dsconfig.local");
+        assert_eq!(ui("DSConfig.local"), "dsconfig.local");
+        assert_eq!(ui(" my deck! "), "my-deck.local");
+        assert!(ui("").starts_with("dsconfig"));
+        assert!(ui("").ends_with(".local"));
     }
 
     #[test]

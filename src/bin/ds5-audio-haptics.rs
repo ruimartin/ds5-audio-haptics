@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use ds5_audio_haptics::config::Config;
-use ds5_audio_haptics::{control, service, web};
+use ds5_audio_haptics::{control, mdns, service, web};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -41,6 +41,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let shared = service::Shared::new(config, path);
             control::start(shared.clone())?;
             web::start(shared.clone());
+            mdns::start(shared.clone());
             service::run(shared)
         }
         Some("ui") => {

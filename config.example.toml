@@ -50,6 +50,8 @@
 # port = 5757
 # lan = false            # true: also reachable from other devices on your local network
                         # (http://<this machine's address>:5757), without a password
+# mdns_name = ""         # name announced on the network when lan = true; the page is then
+                        # at http://<name>.local:5757. Empty = dsconfig-<hostname>
 
 [output]
 # buffer_len = 48         # controller buffer hint (16..127), effect unmeasured

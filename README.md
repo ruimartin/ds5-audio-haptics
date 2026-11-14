@@ -124,12 +124,19 @@ on your home network, tick **Allow other devices on my network** at the bottom o
 ```sh
 ds5-audio-haptics set lan=true
 ds5-audio-haptics save            # keep it on after a restart
-ds5-audio-haptics status | grep ui_lan
+ds5-audio-haptics status | grep -E '"ui_(name|lan)"'
 #  "ui_lan": "http://192.168.1.47:5757/",
+#  "ui_name": "http://dsconfig-steamdeck.local:5757/",
 ```
 
-Open that address in your phone's browser and tune while the game is running on the Deck or
+Open either address in your phone's browser and tune while the game is running on the Deck or
 PC. This is the easiest way to adjust things in Gaming Mode.
+
+The `.local` name is announced by the service itself (a small built-in mDNS responder; no
+Avahi needed) and only while this option is on. It defaults to `dsconfig-<hostname>` so two
+machines never clash; set `mdns_name = "dsconfig"` under `[ui]` in the config file for a
+shorter one. iOS, macOS, Windows 10+, Android 12+ and most Linux desktops resolve `.local`
+names; if a device does not, use the numeric address.
 
 There is no password: with this on, anyone on your local network can change the haptics
 settings (nothing else is exposed). The service answers only private network addresses and
