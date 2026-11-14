@@ -22,7 +22,7 @@ Personal project, early. What has actually been tested:
 | Bazzite desktop | Installs and runs; less play time than the Deck |
 | DualSense Edge | Detected by the code, **never tested** |
 | Adaptive triggers, `shooter` profile | Works on the author's DualSense |
-| Adaptive triggers, `racing` and `generic` profiles, automatic game detection | Written and unit-tested, **not yet tried in a game** |
+| Adaptive triggers, `racing` and `generic` profiles, switching by running game | Written and unit-tested, **not yet tried in a game** |
 | Rumble fallback (`mode = "rumble"`) | Written, **never tested on hardware** |
 | USB connection | Not supported for HD haptics (over USB the controller is a normal audio device) |
 | Following a change of output device (speakers / HDMI / headphones) | Designed for, **not yet verified** |
@@ -194,7 +194,7 @@ with `ds5-audio-haptics set trigger_profile=auto`:
 
 | Profile | R2 | L2 |
 |---|---|---|
-| `shooter` | Gun trigger: a click point with resistance, and a kick on each shot | Free |
+| `shooter` | Gun trigger: a click point with resistance, and a kick on each shot | Lighter steady resistance, half the kick |
 | `racing` | Throttle: light resistance, the faintest kick on bumps | Brake: firm resistance, a moderate kick on bumps |
 | `generic` | Kicks with the haptics, no resistance | Same as R2 |
 | `auto` | `shooter` or `racing` according to the running Steam game, `generic` for anything else | |
@@ -206,13 +206,26 @@ that kicks. `trigger_resistance` and `trigger_strength` (both 0 to 8) scale the 
 `trigger_freq_hz = 0` turns the kick from a short buzz into a single push.
 
 **How `auto` knows the game.** It reads the Steam app ID of the running game from Steam's own
-launcher process and looks it up in two built-in lists of popular titles (44 shooters, 35
-racing games, every ID checked against the Steam store; see [src/games.rs](src/games.rs)).
-Add your own under `[games]` in the config file:
+launcher process, then decides its kind from, in order:
+
+1. your own lists under `[games]` in the config file;
+2. two built-in lists of popular titles (44 shooters, 35 racing games, every ID checked
+   against the Steam store; see [src/games.rs](src/games.rs));
+3. the game's Steam store tags (FPS, Shooter, Racing, Driving and relatives), read from the
+   cache the Steam client keeps on disk. Only a game's leading tags count, so Portal 2, whose
+   "FPS" tag is far down its list, is not treated as a shooter.
+
+So any Steam game in your library is recognised without a list, and nothing is looked up
+online. Non-Steam games get `generic`. To see what a game resolves to, or to override it:
+
+```sh
+ds5-audio-haptics game             # the game running now
+ds5-audio-haptics game 1684930     # any app ID (the number in its store URL)
+```
 
 ```toml
 [games]
-shooter = [1234560]   # the number in the game's store URL
+shooter = [1234560]
 racing = [1234570]
 ```
 

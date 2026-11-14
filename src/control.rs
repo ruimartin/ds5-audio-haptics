@@ -61,12 +61,19 @@ pub fn status(shared: &Shared) -> Value {
 
 /// The running Steam game and what the adaptive triggers make of it.
 fn game(shared: &Shared, cfg: &Config) -> Value {
-    let appid = Some(shared.game.load(Relaxed)).filter(|&id| id != 0);
-    let profile = crate::triggers::resolve(cfg.params().trigger_profile, appid, &cfg.games);
+    use crate::games::{Kind, Source};
+    let game = shared.game.lock().unwrap().clone();
+    let kind = game.as_ref().and_then(|g| g.kind);
     json!({
-        "appid": appid,
-        "name": appid.and_then(crate::games::name),
-        "trigger_profile": profile,
+        "appid": game.as_ref().map(|g| g.appid),
+        "name": game.as_ref().and_then(|g| g.name.clone()),
+        "kind": kind.map(|k| match k.0 { Kind::Shooter => "shooter", Kind::Racing => "racing" }),
+        "known_from": kind.map(|k| match k.1 {
+            Source::UserList => "your [games] list",
+            Source::BuiltInList => "built-in list",
+            Source::SteamTags => "Steam store tags",
+        }),
+        "trigger_profile": crate::triggers::resolve(cfg.params().trigger_profile, kind.map(|k| k.0)),
     })
 }
 

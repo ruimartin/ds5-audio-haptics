@@ -4,8 +4,8 @@
 
 //! What each adaptive trigger does under each profile.
 
-use crate::config::{Games, Params, TriggerProfile};
-use crate::games::{self, Kind};
+use crate::config::{Params, TriggerProfile};
+use crate::games::Kind;
 use crate::protocol::TriggerEffect;
 
 /// One trigger's behaviour.
@@ -24,12 +24,13 @@ pub struct Plan {
     pub left: Side,
 }
 
+#[cfg(test)]
 const FREE: Side = Side { rest: TriggerEffect::OFF, kick: 0 };
 
-/// `Auto` resolved against the running game; other profiles pass through.
-pub fn resolve(profile: TriggerProfile, appid: Option<u32>, extra: &Games) -> TriggerProfile {
+/// `Auto` resolved against the kind of game running; other profiles pass through.
+pub fn resolve(profile: TriggerProfile, game: Option<Kind>) -> TriggerProfile {
     match profile {
-        TriggerProfile::Auto => match appid.and_then(|id| games::classify(id, extra)) {
+        TriggerProfile::Auto => match game {
             Some(Kind::Shooter) => TriggerProfile::Shooter,
             Some(Kind::Racing) => TriggerProfile::Racing,
             // Unknown game, or none: follow the haptics on both triggers.
@@ -46,13 +47,14 @@ pub fn plan(profile: TriggerProfile, p: &Params) -> Option<Plan> {
     let steady = |level: u8| if level == 0 { TriggerEffect::OFF } else { TriggerEffect::feedback(1, level) };
     match profile {
         TriggerProfile::Off | TriggerProfile::Auto => None,
-        // Gun: a click point on R2 and the full kick; L2 (aim) stays free.
+        // Gun: a click point on R2 with the full kick. L2 (aim) gets a lighter,
+        // steady resistance and half the kick.
         TriggerProfile::Shooter => Some(Plan {
             right: Side {
                 rest: if resistance == 0 { TriggerEffect::OFF } else { TriggerEffect::weapon(2, 5, resistance) },
                 kick,
             },
-            left: FREE,
+            left: Side { rest: steady(resistance.div_ceil(3)), kick: kick.div_ceil(2) },
         }),
         // Pedals: a firm brake on L2 with half the kick, a light throttle on R2
         // with the faintest kick.
@@ -82,14 +84,12 @@ mod tests {
 
     #[test]
     fn auto_follows_the_game() {
-        let none = Games::default();
-        assert_eq!(resolve(TriggerProfile::Auto, Some(730), &none), TriggerProfile::Shooter);
-        assert_eq!(resolve(TriggerProfile::Auto, Some(1551360), &none), TriggerProfile::Racing);
-        assert_eq!(resolve(TriggerProfile::Auto, Some(42), &none), TriggerProfile::Generic);
-        assert_eq!(resolve(TriggerProfile::Auto, None, &none), TriggerProfile::Generic);
+        assert_eq!(resolve(TriggerProfile::Auto, Some(Kind::Shooter)), TriggerProfile::Shooter);
+        assert_eq!(resolve(TriggerProfile::Auto, Some(Kind::Racing)), TriggerProfile::Racing);
+        assert_eq!(resolve(TriggerProfile::Auto, None), TriggerProfile::Generic);
         // A fixed choice ignores the game.
-        assert_eq!(resolve(TriggerProfile::Racing, Some(730), &none), TriggerProfile::Racing);
-        assert_eq!(resolve(TriggerProfile::Off, Some(730), &none), TriggerProfile::Off);
+        assert_eq!(resolve(TriggerProfile::Racing, Some(Kind::Shooter)), TriggerProfile::Racing);
+        assert_eq!(resolve(TriggerProfile::Off, Some(Kind::Shooter)), TriggerProfile::Off);
     }
 
     #[test]
@@ -98,11 +98,15 @@ mod tests {
     }
 
     #[test]
-    fn shooter_is_gun_on_r2_only() {
+    fn shooter_is_gun_on_r2_and_lighter_on_l2() {
         let p = plan(TriggerProfile::Shooter, &params(5.0, 8.0)).unwrap();
         assert_eq!(p.right.rest, TriggerEffect::weapon(2, 5, 5));
         assert_eq!(p.right.kick, 8);
-        assert_eq!(p.left, FREE);
+        assert_eq!(p.left.rest, TriggerEffect::feedback(1, 2));
+        assert_eq!(p.left.kick, 4);
+        // Resistance and kick both off: nothing on either trigger.
+        let none = plan(TriggerProfile::Shooter, &params(0.0, 0.0)).unwrap();
+        assert_eq!((none.right, none.left), (FREE, FREE));
     }
 
     #[test]

@@ -248,7 +248,7 @@ function render(s) {
   }
   const g = s.game, auto = s.params.trigger_profile === "auto";
   $("note_game").textContent = !g.appid ? "No Steam game running." + (auto ? " Using: generic." : "")
-    : "Running: " + (g.name || "an unlisted game (app " + g.appid + ")") + "." + (auto ? " Using: " + g.trigger_profile + "." : "");
+    : "Running: " + (g.name || "app " + g.appid) + (g.kind ? " (" + g.kind + ", from " + g.known_from + ")" : " (kind unknown)") + "." + (auto ? " Using: " + g.trigger_profile + "." : "");
   drawCurve();
 }
 function renderDevice(output, capture) {

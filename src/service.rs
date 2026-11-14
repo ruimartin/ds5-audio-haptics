@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -30,8 +30,8 @@ pub struct Shared {
     /// False while no controller is usable; audio capture is stopped meanwhile.
     pub sink_present: AtomicBool,
     pub capture: Mutex<String>,
-    /// Steam app ID of the running game, 0 when none.
-    pub game: AtomicU32,
+    /// The running Steam game and how it was classified; `None` when none runs.
+    pub game: Mutex<Option<Game>>,
     started: Instant,
     /// When the settings page last asked for levels (ms since start, 0 = never).
     meter_seen_ms: AtomicU64,
@@ -54,7 +54,7 @@ impl Shared {
             sink: Mutex::new("none".into()),
             sink_present: AtomicBool::new(false),
             capture: Mutex::new("stopped".into()),
-            game: AtomicU32::new(0),
+            game: Mutex::new(None),
             started: Instant::now(),
             meter_seen_ms: AtomicU64::new(0),
             meter: Mutex::new(Meter { floor_db: -90.0, ..Default::default() }),
@@ -101,6 +101,37 @@ impl Shared {
     }
 }
 
+/// The Steam game that is running.
+#[derive(Clone, Debug)]
+pub struct Game {
+    pub appid: u32,
+    pub name: Option<String>,
+    pub kind: Option<(crate::games::Kind, crate::games::Source)>,
+}
+
+/// Keeps `shared.game` current. The Steam cache is read once per game start.
+fn watch_games(shared: &Shared) -> ! {
+    use crate::games;
+    let mut cached: Option<(u32, Option<games::AppInfo>)> = None;
+    loop {
+        let game = games::running_appid().map(|appid| {
+            if cached.as_ref().map(|c| c.0) != Some(appid) {
+                cached = Some((appid, games::steam_info(appid)));
+            }
+            let info = cached.as_ref().and_then(|c| c.1.as_ref());
+            // Re-classified every time so edits to the [games] lists apply at once.
+            let extra = shared.config.lock().unwrap().games.clone();
+            Game {
+                appid,
+                name: info.and_then(|i| i.name.clone()).or_else(|| games::name(appid).map(String::from)),
+                kind: games::classify(appid, &extra, info.map(|i| i.tags.as_slice())),
+            }
+        });
+        *shared.game.lock().unwrap() = game;
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
 /// 10.67 ms of haptics plus what the rumble fallback needs.
 struct Frame {
     samples: [i8; PAYLOAD],
@@ -124,10 +155,7 @@ pub fn run(shared: Arc<Shared>) -> ! {
     {
         // Notice which game is running, for the adaptive-trigger profiles.
         let shared = shared.clone();
-        let _ = std::thread::Builder::new().name("games".into()).spawn(move || loop {
-            shared.game.store(crate::games::running_appid().unwrap_or(0), Relaxed);
-            std::thread::sleep(Duration::from_secs(3));
-        });
+        let _ = std::thread::Builder::new().name("games".into()).spawn(move || watch_games(&shared));
     }
     loop {
         capture_loop(&shared, &tx);
@@ -337,8 +365,8 @@ fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
                 state_seq = state_seq.wrapping_add(1);
                 let _ = file.write(&trigger_report(state_seq, Some(right), Some(left)));
             };
-            let appid = Some(shared.game.load(Relaxed)).filter(|&id| id != 0);
-            let profile = triggers::resolve(params.trigger_profile, appid, &cfg.games);
+            let game_kind = shared.game.lock().unwrap().as_ref().and_then(|g| g.kind).map(|k| k.0);
+            let profile = triggers::resolve(params.trigger_profile, game_kind);
             let plan = triggers::plan(profile, &params).filter(|_| cfg.enabled);
 
             if kick.is_some_and(|until| Instant::now() >= until) || (kick.is_some() && plan.is_none()) {

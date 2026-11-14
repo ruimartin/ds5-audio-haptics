@@ -17,6 +17,8 @@ ds5-audio-haptics: DualSense HD haptics from system audio
   ds5-audio-haptics set KEY=VALUE ...     change settings on the running service
   ds5-audio-haptics save                  write the running settings to the config file
   ds5-audio-haptics default-config        print a commented config file
+  ds5-audio-haptics game [APPID]          how a Steam game is classified for the adaptive
+                                          triggers (default: the game running now)
   ds5-audio-haptics render [--config PATH] <in.f32 >out.s8
                                           offline: 48 kHz stereo f32 in, 3 kHz stereo s8 out
 
@@ -71,6 +73,27 @@ fn run(args: &[String]) -> Result<(), String> {
                 req["dsp"] = Value::Object(dsp);
             }
             print(control::request(&req)?)
+        }
+        Some("game") => {
+            use ds5_audio_haptics::games;
+            let appid = match args.get(1) {
+                Some(text) => text.parse::<u32>().map_err(|_| "APPID must be a number")?,
+                None => games::running_appid().ok_or("no Steam game is running")?,
+            };
+            let info = games::steam_info(appid);
+            let extra = Config::load(&Config::default_path())?.games;
+            let kind = games::classify(appid, &extra, info.as_ref().map(|i| i.tags.as_slice()));
+            let name = info.as_ref().and_then(|i| i.name.clone()).or_else(|| games::name(appid).map(String::from));
+            println!("app {appid}: {}", name.as_deref().unwrap_or("(name unknown)"));
+            match &info {
+                Some(i) => println!("store tags in Steam's cache: {:?}", i.tags),
+                None => println!("not in Steam's local cache"),
+            }
+            match kind {
+                Some((k, source)) => println!("classified as {k:?} (from {source:?})"),
+                None => println!("not a known shooter or racing game: the generic profile applies"),
+            }
+            Ok(())
         }
         Some("render") => {
             use std::io::{Read, Write};
