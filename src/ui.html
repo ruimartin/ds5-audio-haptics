@@ -148,6 +148,7 @@ const GROUPS = [
     { key: "trigger_ms", label: "Kick length", min: 20, max: 300, step: 10, unit: " ms" },
     { key: "trigger_freq_hz", label: "Kick pitch", help: "0 = one push, no buzz", min: 0, max: 100, step: 5, unit: " Hz" },
     { key: "trigger_threshold", label: "Only for hits above", help: "impact strength", min: 0, max: 1, step: 0.05 },
+    { key: "trigger_start", label: "Kick only when pulled past", help: "tenths of the travel; 0 = always", min: 0, max: 6, step: 1 },
   ]},
   { title: "Direction", hint: "Moves the haptics between the grips to follow the sound.", rows: [
     { key: "stereo", label: "Follow left / right", toggle: true },

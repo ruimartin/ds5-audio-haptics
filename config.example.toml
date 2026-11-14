@@ -57,6 +57,8 @@
 # trigger_freq_hz = 40          # 0 = the kick is a single push back instead of a buzz
 # trigger_ms = 50               # length of each kick
 # trigger_threshold = 0.5       # only impacts at least this strong (0..1)
+# trigger_start = 2             # kicks act only once the trigger is pulled this far, in
+                                # tenths of its travel (0..6); an untouched trigger stays silent
 
 [ui]
 # enabled = true         # settings page at http://127.0.0.1:5757 (this machine only)

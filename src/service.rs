@@ -13,9 +13,9 @@ use crate::rumble::{self, Rumble};
 use crate::triggers;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -30,6 +30,13 @@ pub struct Shared {
     /// False while no controller is usable; audio capture is stopped meanwhile.
     pub sink_present: AtomicBool,
     pub capture: Mutex<String>,
+    /// How far R2 and L2 are pulled right now (0..255), read from the controller.
+    pub trigger_right: AtomicU8,
+    pub trigger_left: AtomicU8,
+    /// True while an adaptive-trigger profile is active and positions are needed.
+    triggers_wanted: AtomicBool,
+    /// Counts controller (re)connections, so an old input reader knows to stop.
+    sink_epoch: AtomicU64,
     /// The running Steam game and how it was classified; `None` when none runs.
     pub game: Mutex<Option<Game>>,
     started: Instant,
@@ -54,6 +61,10 @@ impl Shared {
             sink: Mutex::new("none".into()),
             sink_present: AtomicBool::new(false),
             capture: Mutex::new("stopped".into()),
+            trigger_right: AtomicU8::new(0),
+            trigger_left: AtomicU8::new(0),
+            triggers_wanted: AtomicBool::new(false),
+            sink_epoch: AtomicU64::new(0),
             game: Mutex::new(None),
             started: Instant::now(),
             meter_seen_ms: AtomicU64::new(0),
@@ -263,18 +274,60 @@ fn open_hd(cfg: &Config) -> Result<(File, String), String> {
         .find(|c| cfg.device.is_empty() || c.uniq.eq_ignore_ascii_case(&cfg.device))
         .ok_or("no Bluetooth DualSense")?;
     let file = OpenOptions::new()
+        .read(true)
         .write(true)
         .open(&c.hidraw)
         .map_err(|e| format!("{}: {e}", c.hidraw.display()))?;
     Ok((file, format!("hd {} {} ({})", c.hidraw.display(), c.name, c.uniq)))
 }
 
-fn open_sink(shared: &Shared, cfg: &Config) -> Sink {
+/// Trigger positions from one input report. Full Bluetooth reports (0x31) carry L2
+/// and R2 in bytes 6 and 7; the short report (0x01) a controller sends before it is
+/// switched to full mode carries them in bytes 8 and 9.
+fn trigger_positions(report: &[u8]) -> Option<(u8, u8)> {
+    match report {
+        [0x31, _, _, _, _, _, l2, r2, ..] => Some((*r2, *l2)),
+        [0x01, _, _, _, _, _, _, _, l2, r2, ..] => Some((*r2, *l2)),
+        _ => None,
+    }
+}
+
+/// Follows the trigger positions for as long as this controller connection lasts.
+/// Idle (not reading) while no trigger profile needs them.
+fn input_loop(shared: Arc<Shared>, mut file: File, epoch: u64) {
+    let mut report = [0u8; 128];
+    while shared.sink_epoch.load(Relaxed) == epoch {
+        if !shared.triggers_wanted.load(Relaxed) {
+            std::thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+        match file.read(&mut report) {
+            Ok(n) => {
+                if let Some((right, left)) = trigger_positions(&report[..n]) {
+                    shared.trigger_right.store(right, Relaxed);
+                    shared.trigger_left.store(left, Relaxed);
+                }
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+fn open_sink(shared: &Arc<Shared>, cfg: &Config) -> Sink {
     let mut why = String::new();
     if cfg.mode != Mode::Rumble {
         match open_hd(cfg) {
             Ok((file, text)) => {
                 shared.set_sink(text);
+                let epoch = shared.sink_epoch.fetch_add(1, Relaxed) + 1;
+                shared.trigger_right.store(0, Relaxed);
+                shared.trigger_left.store(0, Relaxed);
+                if let Ok(reader) = file.try_clone() {
+                    let shared = shared.clone();
+                    let _ = std::thread::Builder::new()
+                        .name("input".into())
+                        .spawn(move || input_loop(shared, reader, epoch));
+                }
                 let builder = ReportBuilder::new(ControlForm::Awalol, cfg.output.buffer_len.clamp(16, 127));
                 return Sink::Hd { file, builder };
             }
@@ -296,7 +349,7 @@ fn open_sink(shared: &Shared, cfg: &Config) -> Sink {
     Sink::None
 }
 
-fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
+fn output_loop(shared: &Arc<Shared>, rx: Receiver<Frame>) {
     let period = Duration::from_nanos(REPORT_PERIOD_NS);
     let mut cfg = shared.config();
     let mut generation = shared.generation.load(Relaxed);
@@ -374,18 +427,24 @@ fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
                 kick_ended = Instant::now();
                 resting = None; // fall through to restoring the resting feel
             }
+            shared.triggers_wanted.store(plan.is_some(), Relaxed);
             if let (Some(plan), Some(frame)) = (plan, queue.front()) {
+                // A trigger is only kicked while it is really being pulled: an idle
+                // trigger's motor would otherwise rattle the whole controller.
+                let start = params.trigger_start as u8;
+                let pulled = |position: &AtomicU8| position.load(Relaxed) as u32 * 10 >= start as u32 * 255;
+                let live = |side: triggers::Side, position: &AtomicU8| side.kick > 0 && pulled(position);
+                let (right, left) = (live(plan.right, &shared.trigger_right), live(plan.left, &shared.trigger_left));
                 // One kick per impact, always the same strength and length, with a
                 // pause before the next: separate thumps instead of a wavering buzz.
                 let rested = kick_ended.elapsed() >= Duration::from_millis(40);
-                let wanted = plan.right.kick > 0 || plan.left.kick > 0;
-                if wanted && kick.is_none() && rested && frame.onset >= params.trigger_threshold.max(0.01) {
-                    let pulse = |side: triggers::Side| match (side.kick, params.trigger_freq_hz as u8) {
-                        (0, _) => side.rest,
-                        (level, 0) => TriggerEffect::feedback(0, level), // a single push back
-                        (level, hz) => TriggerEffect::vibration(0, level, hz),
+                if (right || left) && kick.is_none() && rested && frame.onset >= params.trigger_threshold.max(0.01) {
+                    let pulse = |side: triggers::Side, live: bool| match (live, params.trigger_freq_hz as u8) {
+                        (false, _) => side.rest,
+                        (true, 0) => TriggerEffect::feedback(start, side.kick), // a single push back
+                        (true, hz) => TriggerEffect::vibration(start, side.kick, hz),
                     };
-                    set(pulse(plan.right), pulse(plan.left));
+                    set(pulse(plan.right, right), pulse(plan.left, left));
                     kick = Some(Instant::now() + Duration::from_millis(params.trigger_ms as u64));
                 }
             }
@@ -403,6 +462,7 @@ fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
                 resting_at = Instant::now();
             }
         } else {
+            shared.triggers_wanted.store(false, Relaxed);
             kick = None;
             resting = None;
         }
@@ -463,5 +523,27 @@ fn output_loop(shared: &Shared, rx: Receiver<Frame>) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trigger_positions;
+
+    #[test]
+    fn reads_trigger_positions_from_input_reports() {
+        // Full Bluetooth report: id, extra byte, 4 stick axes, L2, R2.
+        let mut full = [0u8; 78];
+        full[0] = 0x31;
+        full[6] = 40; // L2
+        full[7] = 200; // R2
+        assert_eq!(trigger_positions(&full), Some((200, 40)));
+        // Short report sent before the controller is switched to full mode.
+        let short = [0x01, 128, 128, 128, 128, 8, 0, 0, 12, 250];
+        assert_eq!(trigger_positions(&short), Some((250, 12)));
+        // Anything else, or a truncated report, yields nothing.
+        assert_eq!(trigger_positions(&[0x31, 0, 0]), None);
+        assert_eq!(trigger_positions(&[0x05; 20]), None);
+        assert_eq!(trigger_positions(&[]), None);
     }
 }

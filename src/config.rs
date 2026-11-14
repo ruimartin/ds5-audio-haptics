@@ -224,6 +224,9 @@ pub struct Params {
     pub trigger_ms: f32,
     /// Only impacts at least this strong (0..1) kick the trigger.
     pub trigger_threshold: f32,
+    /// How far a trigger must be pulled before it is kicked, in tenths of its travel
+    /// (0..6). The position is read from the controller; an idle trigger gets nothing.
+    pub trigger_start: f32,
 }
 
 macro_rules! overrides {
@@ -252,7 +255,7 @@ overrides! {
     transient_pulse_hz: f32, transient_click_hz: f32, transient_decay_ms: f32, transient_open_ms: f32,
     trigger_profile: TriggerProfile, trigger_resistance: f32,
     trigger_strength: f32,
-    trigger_freq_hz: f32, trigger_ms: f32, trigger_threshold: f32,
+    trigger_freq_hz: f32, trigger_ms: f32, trigger_threshold: f32, trigger_start: f32,
 }
 
 impl Preset {
@@ -292,6 +295,7 @@ impl Preset {
             trigger_freq_hz: 40.0,
             trigger_ms: 50.0,
             trigger_threshold: 0.5,
+            trigger_start: 2.0,
         };
         match self {
             Preset::Game => game,
@@ -350,6 +354,7 @@ impl Config {
         p.trigger_freq_hz = p.trigger_freq_hz.clamp(0.0, 200.0);
         p.trigger_ms = p.trigger_ms.clamp(20.0, 1000.0);
         p.trigger_threshold = p.trigger_threshold.clamp(0.0, 1.0);
+        p.trigger_start = p.trigger_start.clamp(0.0, 6.0).round();
         p
     }
 

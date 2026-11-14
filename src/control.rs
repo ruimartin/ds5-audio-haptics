@@ -74,6 +74,8 @@ fn game(shared: &Shared, cfg: &Config) -> Value {
             Source::SteamTags => "Steam store tags",
         }),
         "trigger_profile": crate::triggers::resolve(cfg.params().trigger_profile, kind.map(|k| k.0)),
+        "r2": shared.trigger_right.load(Relaxed),
+        "l2": shared.trigger_left.load(Relaxed),
     })
 }
 

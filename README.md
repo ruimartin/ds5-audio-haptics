@@ -127,7 +127,7 @@ on your home network, tick **Allow other devices on my network** at the bottom o
 ds5-audio-haptics set lan=true
 ds5-audio-haptics save            # keep it on after a restart
 ds5-audio-haptics status | grep -E '"ui_(name|lan)"'
-#  "ui_lan": "http://192.168.1.47:5757/",
+#  "ui_lan": "http://192.168.1.20:5757/",
 #  "ui_name": "http://dsconfig-steamdeck.local:5757/",
 ```
 
@@ -228,6 +228,10 @@ ds5-audio-haptics game 1684930     # any app ID (the number in its store URL)
 shooter = [1234560]
 racing = [1234570]
 ```
+
+A trigger is only kicked while the controller reports it as pulled (past about 20% by
+default, `trigger_start`); an idle trigger's motor is left alone, so a controller lying on the
+table stays quiet.
 
 Things to know: the trigger motors are audible; very fast automatic fire (above roughly 11
 shots a second) skips some shots; and the racing profile reacts to sound, not to the car, so
