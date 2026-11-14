@@ -1,6 +1,6 @@
 [package]
 name = "ds5-audio-haptics"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MPL-2.0"
 description = "Drive a Bluetooth DualSense's HD haptics from system audio"

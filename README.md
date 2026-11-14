@@ -16,6 +16,7 @@ Personal project, early. What has actually been tested:
 |---|---|
 | Steam Deck (SteamOS 3.9), DualSense over Bluetooth | Works, used daily by the author |
 | Alongside Steam Input (lightbar, LEDs, game rumble) | Works; see [Steam Input](#steam-input) |
+| Controller going to sleep and reconnecting | Works |
 | Bazzite desktop | Installs and runs; less play time than the Deck |
 | DualSense Edge | Detected by the code, **never tested** |
 | Rumble fallback (`mode = "rumble"`) | Written, **never tested on hardware** |
@@ -114,9 +115,9 @@ All keys, with comments, are in [config.example.toml](config.example.toml).
 ### Known limits
 
 - A game sends music and effects as one mixed stream, so they cannot be truly separated.
-  `background_reject` is a heuristic: loud drum hits can still get through, and in games whose
-  music has heavy bass a long held-down burst of fire starts strong and fades after a second
-  or two.
+  `background_reject` is a heuristic: loud drum hits can still get through, and after an
+  intense moment louder music can be felt for a few seconds until it is recognised as
+  background again. Sustained gunfire is deliberately never faded.
 - The two grips are mechanically coupled. Direction is clear for sharp sounds and vague for
   low rumbles.
 - Everything playing on the default output is used, including voice chat and videos.

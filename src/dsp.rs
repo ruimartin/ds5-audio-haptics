@@ -142,8 +142,9 @@ impl OnsetDetector {
         self.fast += if v > self.fast { 0.04 } else { 0.0014 } * (v - self.fast);
         self.bright += if vb > self.bright { 0.04 } else { 0.0014 } * (vb - self.bright);
         self.slow += 0.00035 * (v - self.slow);
-        // About 3 s. Slow enough that a burst of gunfire does not become the bed.
-        self.bed += 0.000007 * (v - self.bed);
+        // The bed follows quiet quickly (about 1.5 s) and loudness slowly (about 8 s),
+        // so a long burst of gunfire does not become the bed and keeps registering.
+        self.bed += if v < self.bed { 0.000014 } else { 0.0000026 } * (v - self.bed);
         if self.window > 0 {
             self.peak = self.peak.max(self.fast - self.bed);
             self.peak_bright = self.peak_bright.max(self.bright);
@@ -232,18 +233,21 @@ impl Dynamics {
 
         // 4 dB of hysteresis stops the gate chattering around the threshold.
         self.open = db > if self.open { p.gate_db - 4.0 } else { p.gate_db };
+        // Onsets lift background rejection, and decay over transient_open_ms.
+        self.open_by_onset = onset.max(self.open_by_onset * (1.0 - coeff(p.transient_open_ms.max(1.0), OUTPUT_RATE)));
+
         // Background estimate: drops quickly to the quietest recent level and climbs
-        // at a fixed slow rate. A steady bed of music settles at the floor; a firefight
-        // 20 dB above it stays clear of the floor for several seconds.
+        // at a fixed slow rate, so a steady bed of music settles at the floor. It does
+        // not climb while hits keep landing: sustained gunfire must never turn into
+        // "background" and fade.
         let level = db.max(p.gate_db);
         if level < self.floor_db {
             self.floor_db += coeff(p.background_fall_ms, OUTPUT_RATE) * (level - self.floor_db);
-        } else {
+        } else if self.open_by_onset < 0.1 {
             self.floor_db = (self.floor_db + p.background_rise_db_s / OUTPUT_RATE).min(level);
         }
         // Full strength when 9 dB or more above the floor, up to 30 dB down at the floor.
         let above = ((db - self.floor_db) / 9.0).clamp(0.0, 1.0);
-        self.open_by_onset = onset.max(self.open_by_onset * (1.0 - coeff(p.transient_open_ms.max(1.0), OUTPUT_RATE)));
         let reject_db = -30.0 * p.background_reject * (1.0 - above) * (1.0 - self.open_by_onset);
 
         let target = if !self.open {
