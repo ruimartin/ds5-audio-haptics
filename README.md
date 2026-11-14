@@ -5,6 +5,8 @@ whatever your PC or Steam Deck is playing and drives the controller's HD haptic 
 (the voice coils, not classic rumble) from it: bass, gunshots and impacts, panned between the
 two grips to follow the sound.
 
+![The settings page: live levels, response curve and sliders](docs/img/settings-dark.png)
+
 It works with any game, needs no game support, and runs entirely in your user account:
 no kernel module, no root, nothing installed outside your home directory.
 
@@ -53,6 +55,7 @@ everything lives in your home directory:
 | `~/.local/bin/ds5-audio-haptics`, `~/.local/bin/ds5-tone` | static binaries |
 | `~/.config/systemd/user/ds5-audio-haptics.service` | user service |
 | `~/.config/ds5-audio-haptics/config.toml` | settings (created on first install, never overwritten) |
+| `~/.local/share/applications/ds5-audio-haptics.desktop` | menu entry for the settings page |
 
 Check that it found your controller:
 
@@ -78,7 +81,32 @@ ds5-tone --freq 160 --channel left    # left grip only
 
 ## Using it
 
-Settings can be changed while a game is running:
+### Settings page
+
+The service serves a settings page on the machine it runs on. Open **DualSense Audio Haptics**
+from the application menu, or run:
+
+```sh
+ds5-audio-haptics ui        # opens http://127.0.0.1:5757/
+```
+
+![Settings page, light theme](docs/img/settings-light.png)
+
+- **Live** shows the last 12 seconds: overall volume, the bass that is felt, what the service
+  currently treats as background, the haptic strength being sent, and each detected impact.
+  It works without a controller connected, so you can watch and tune before you feel anything.
+- **Response curve** plots bass level against haptic strength; the dot is the sound right now.
+  The sliders in the "Response curve" card reshape it.
+- Every change applies immediately. **Save as default** keeps it across restarts; the ↺ next
+  to a slider returns that one setting to the preset.
+
+The page is only reachable from the same machine (it listens on 127.0.0.1 and refuses requests
+coming from other web sites). On a Steam Deck, open it in Desktop Mode. Set `[ui] enabled =
+false` in the config file to turn it off.
+
+### Command line
+
+The same settings can be changed from a terminal, also while a game is running:
 
 ```sh
 ds5-audio-haptics set intensity=0.7        # overall strength (0..4)
@@ -99,7 +127,8 @@ a fresh commented one. Editing the file by hand works too, followed by
 |---|---|---|
 | `intensity` | 1.0 | Overall strength |
 | `background_reject` | 0.9 | Turns down steady sound (music, engine drones) so that sounds standing out from it dominate. 0 = off: everything with bass is felt |
-| `background_rise_db_s` | 3 | How fast a sustained sound becomes "background". Lower keeps long firefights strong, higher fades music sooner |
+| `background_rise_db_s` | 3 | How fast a sustained sound becomes "background". Higher fades music sooner |
+| `volume_threshold_db` | -90 (off) | Ignore everything quieter than this overall volume. Helps when a game's music is clearly quieter than its effects; watch the Live graph to pick a value |
 | `bass_boost_db` | 6 | Extra strength below 70 Hz |
 | `lowpass_hz` | 150 | Upper edge of the bass band that is felt |
 | `stereo`, `stereo_width` | true, 1.5 | Pans haptics between the grips following the stereo image; width above 1 exaggerates |
@@ -157,7 +186,8 @@ The report format, the evidence for each field and the hardware test results are
 [docs/PROTOCOL.md](docs/PROTOCOL.md); open risks are in [docs/RISKS.md](docs/RISKS.md).
 
 A local control socket (`$XDG_RUNTIME_DIR/ds5-audio-haptics.sock`, one JSON object per line)
-backs the `status` / `set` / `save` commands and is meant for a future Decky Loader plugin.
+backs the `status` / `set` / `save` commands. The settings page posts the same JSON requests
+to `/api`, and a future Decky Loader plugin would use the socket.
 
 ## Troubleshooting
 

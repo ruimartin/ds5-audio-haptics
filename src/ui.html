@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DualSense Audio Haptics</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --ink: #16181d; --muted: #646b78; --line: #dfe2e8;
+  --accent: #2f6fed; --accent-ink: #ffffff; --ok: #1f9d55; --warn: #c7791a; --off: #9aa1ad;
+  --volume: #9aa1ad; --bass: #2f6fed; --floor: #c7791a; --out: #1f9d55; --hit: #d6336c;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101216; --panel: #1a1d23; --ink: #eceef2; --muted: #9299a6; --line: #2b2f38;
+    --accent: #5b8dff; --accent-ink: #0b0d12; --ok: #3ecf7f; --warn: #f0a44b; --off: #666d7a;
+    --volume: #6f7684; --bass: #5b8dff; --floor: #f0a44b; --out: #3ecf7f; --hit: #ff6b9d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif; }
+main { max-width: 1120px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 14px; }
+h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+.status { display: flex; align-items: center; gap: 8px; color: var(--muted); min-width: 0; flex: 1 1 260px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); flex: none; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); }
+.status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+button, .seg label { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  padding: 8px 14px; border-radius: 8px; cursor: pointer; min-height: 40px; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+.seg { display: inline-flex; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { border-radius: 0; margin-left: -1px; display: inline-flex; align-items: center; }
+.seg label:first-of-type { border-radius: 8px 0 0 8px; margin-left: 0; }
+.seg label:last-of-type { border-radius: 0 8px 8px 0; }
+.seg input:checked + label { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.seg input:focus-visible + label, button:focus-visible, input[type=range]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+section.wide { grid-column: 1 / -1; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 650; }
+.hint { color: var(--muted); font-size: 13px; margin: -4px 0 10px; }
+.live { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); }
+@media (max-width: 760px) { .live { grid-template-columns: 1fr; } }
+canvas { width: 100%; height: 220px; display: block; border-radius: 8px; background: var(--bg); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) 74px 34px; align-items: center; gap: 2px 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+.row:first-of-type { border-top: 0; }
+.row label { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 10px; font-weight: 550; }
+.row label small { color: var(--muted); font-weight: 400; text-align: right; }
+.row output { font-variant-numeric: tabular-nums; text-align: right; color: var(--ink); }
+.row output.changed { color: var(--accent); font-weight: 650; }
+.row .reset { padding: 0; min-height: 30px; width: 34px; border-radius: 6px; visibility: hidden; }
+.row .reset.on { visibility: visible; }
+input[type=range] { width: 100%; height: 30px; accent-color: var(--accent); margin: 0; }
+.toggle { display: flex; align-items: center; gap: 10px; }
+.toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
+@media (min-width: 760px) { section.two { grid-column: span 2; } }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 28px; }
+.pair .row:nth-of-type(2) { border-top: 0; }
+@media (max-width: 700px) { .pair .row:nth-of-type(2) { border-top: 1px solid var(--line); } }
+footer { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0 8px; color: var(--muted); font-size: 13px; }
+#toast { margin-left: auto; min-height: 20px; }
+#toast.err { color: var(--hit); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>DualSense Audio Haptics</h1>
+  <div class="status"><i class="dot" id="dot"></i><span id="device">Connecting…</span></div>
+  <div class="controls">
+    <div class="seg" role="radiogroup" aria-label="Haptics on or off">
+      <input type="radio" name="enabled" id="en1" value="true"><label for="en1">On</label>
+      <input type="radio" name="enabled" id="en0" value="false"><label for="en0">Off</label>
+    </div>
+    <div class="seg" role="radiogroup" aria-label="Preset">
+      <input type="radio" name="preset" id="pg" value="game"><label for="pg">Game</label>
+      <input type="radio" name="preset" id="pm" value="music"><label for="pm">Music</label>
+    </div>
+  </div>
+</header>
+
+<div class="grid">
+  <section class="wide">
+    <h2>Live</h2>
+    <div class="live">
+      <div>
+        <canvas id="scope" aria-label="Sound levels over the last 12 seconds"></canvas>
+        <div class="legend">
+          <span><i style="background:var(--volume)"></i>Overall volume</span>
+          <span><i style="background:var(--bass)"></i>Bass</span>
+          <span><i style="background:var(--floor)"></i>Background estimate</span>
+          <span><i style="background:var(--out)"></i>Haptic strength</span>
+          <span><i style="background:var(--hit)"></i>Impact</span>
+        </div>
+      </div>
+      <div>
+        <canvas id="curve" aria-label="Response curve: bass level to haptic strength"></canvas>
+        <div class="legend"><span>Response curve: bass level (dB) → haptic strength. The dot is the sound right now.</span></div>
+      </div>
+    </div>
+  </section>
+  <div id="groups" class="grid" style="grid-column:1/-1"></div>
+</div>
+
+<footer>
+  <button class="primary" id="save">Save as default</button>
+  <button id="resetAll">Reset all to preset</button>
+  <span>Changes apply immediately. Save keeps them after a restart.</span>
+  <span id="toast" role="status"></span>
+</footer>
+</main>
+
+<script>
+"use strict";
+// Each control maps to one [dsp] key. `help` says what moving it does.
+const GROUPS = [
+  { title: "Strength", rows: [
+    { key: "intensity", label: "Intensity", help: "overall strength", min: 0, max: 3, step: 0.05 },
+    { key: "bass_boost_db", label: "Deep bass boost", help: "extra below 70 Hz", min: 0, max: 18, step: 1, unit: " dB" },
+    { key: "lowpass_hz", label: "Bass range", help: "feel sound up to this pitch", min: 60, max: 400, step: 5, unit: " Hz" },
+  ]},
+  { title: "Music and background", hint: "Steady sound is turned down so that effects stand out.", rows: [
+    { key: "background_reject", label: "Background rejection", help: "0 = feel everything", min: 0, max: 1, step: 0.05 },
+    { key: "background_rise_db_s", label: "Adapt speed", help: "how fast steady sound fades", min: 0.5, max: 20, step: 0.5, unit: " dB/s" },
+    { key: "volume_threshold_db", label: "Volume threshold", help: "ignore anything quieter (−90 = off)", min: -90, max: -3, step: 1, unit: " dB" },
+  ]},
+  { title: "Impacts", hint: "A short pulse on gunshots, hits and menu sounds.", rows: [
+    { key: "transient", label: "Impact pulses", toggle: true },
+    { key: "transient_gain", label: "Pulse strength", min: 0, max: 1, step: 0.05 },
+    { key: "transient_sensitivity", label: "Sensitivity", help: "lower if music triggers pulses", min: 0, max: 3, step: 0.05 },
+    { key: "transient_click_hz", label: "Tick sharpness", help: "pitch for bright sounds", min: 100, max: 400, step: 10, unit: " Hz" },
+  ]},
+  { title: "Direction", hint: "Moves the haptics between the grips to follow the sound.", rows: [
+    { key: "stereo", label: "Follow left / right", toggle: true },
+    { key: "stereo_width", label: "Separation", help: "above 1 exaggerates", min: 0, max: 3, step: 0.1 },
+  ]},
+  { title: "Response curve", hint: "How bass level becomes haptic strength. Watch the curve above.", two: true, rows: [
+    { key: "gate_db", label: "Noise gate", help: "silent below this", min: -80, max: -15, step: 1, unit: " dB" },
+    { key: "curve", label: "Quiet lift", help: "lower = quiet sounds felt more", min: 0.4, max: 1.4, step: 0.05 },
+    { key: "makeup_db", label: "Boost", min: -12, max: 24, step: 1, unit: " dB" },
+    { key: "comp_threshold_db", label: "Compress above", min: -40, max: 0, step: 1, unit: " dB" },
+    { key: "comp_ratio", label: "Compression", help: "1 = none", min: 1, max: 10, step: 0.5, unit: ":1" },
+    { key: "ceiling", label: "Maximum strength", min: 0.2, max: 1, step: 0.05 },
+  ]},
+];
+
+const $ = (id) => document.getElementById(id);
+let state = null;          // last status reply
+let dragging = null;       // key being moved; polling must not fight the user's hand
+const pending = {};        // debounced dsp changes
+
+async function api(req) {
+  const r = await fetch("/api", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || "request failed");
+  return j;
+}
+function toast(text, err) {
+  const t = $("toast"); t.textContent = text; t.className = err ? "err" : "";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.textContent = ""), 3500);
+}
+function format(row, v) {
+  const digits = row.step >= 1 ? 0 : row.step >= 0.1 ? 1 : 2;
+  return Number(v).toFixed(digits) + (row.unit || "");
+}
+
+// Build the controls once.
+for (const g of GROUPS) {
+  const s = document.createElement("section");
+  s.innerHTML = `<h2>${g.title}</h2>` + (g.hint ? `<p class="hint">${g.hint}</p>` : "");
+  const box = document.createElement("div");
+  if (g.two) { s.classList.add("two"); box.className = "pair"; }
+  s.appendChild(box);
+  for (const row of g.rows) {
+    const d = document.createElement("div"); d.className = "row";
+    const help = row.help ? `<small>${row.help}</small>` : "";
+    d.innerHTML = row.toggle
+      ? `<div class="toggle" style="grid-column:1/3"><input type="checkbox" id="c_${row.key}"><label for="c_${row.key}" style="font-weight:550">${row.label}</label></div>`
+      : `<label for="c_${row.key}"><span>${row.label}</span>${help}</label>
+         <input type="range" id="c_${row.key}" min="${row.min}" max="${row.max}" step="${row.step}">
+         <output id="o_${row.key}"></output>`;
+    const reset = document.createElement("button");
+    reset.className = "reset"; reset.id = "r_" + row.key; reset.textContent = "↺";
+    reset.title = "Back to the preset's value"; reset.setAttribute("aria-label", `Reset ${row.label} to the preset`);
+    reset.onclick = () => send({ dsp: { [row.key]: null } });
+    d.appendChild(reset);
+    box.appendChild(d);
+    const input = d.querySelector("input");
+    if (row.toggle) {
+      input.onchange = () => send({ dsp: { [row.key]: input.checked } });
+    } else {
+      input.oninput = () => { dragging = row.key; $("o_" + row.key).textContent = format(row, input.value); queue(row.key, Number(input.value)); };
+      input.onchange = () => { dragging = null; };
+    }
+  }
+  $("groups").appendChild(s);
+}
+
+function queue(key, value) {
+  pending[key] = value;
+  clearTimeout(queue.timer);
+  queue.timer = setTimeout(() => { const dsp = { ...pending }; for (const k in pending) delete pending[k]; send({ dsp }); }, 60);
+}
+async function send(change) {
+  try { render(await api({ cmd: "set", ...change })); } catch (e) { toast(e.message, true); }
+}
+function render(s) {
+  state = s;
+  $(s.enabled ? "en1" : "en0").checked = true;
+  $(s.preset === "music" ? "pm" : "pg").checked = true;
+  for (const g of GROUPS) for (const row of g.rows) {
+    const input = $("c_" + row.key), v = s.params[row.key], changed = row.key in s.overrides;
+    $("r_" + row.key).classList.toggle("on", changed);
+    if (row.toggle) { input.checked = v; continue; }
+    if (dragging !== row.key) input.value = v;
+    const out = $("o_" + row.key);
+    out.textContent = format(row, dragging === row.key ? input.value : v);
+    out.classList.toggle("changed", changed);
+  }
+  drawCurve();
+}
+function renderDevice(output, capture) {
+  const hd = output.startsWith("hd "), rumble = output.startsWith("rumble ");
+  $("dot").className = "dot " + (hd ? "ok" : rumble ? "warn" : "");
+  $("device").textContent = hd ? output.replace(/^hd \S+ /, "") + (capture === "running" ? "" : " — " + capture)
+    : rumble ? "Rumble fallback (HD haptics unavailable)"
+    : state && !state.enabled ? "Off" : "No controller connected: showing levels only";
+  $("device").title = output;
+}
+
+for (const el of document.querySelectorAll("input[name=enabled]")) el.onchange = () => send({ enabled: el.value === "true" });
+for (const el of document.querySelectorAll("input[name=preset]")) el.onchange = () => send({ preset: el.value });
+$("save").onclick = async () => { try { await api({ cmd: "save" }); toast("Saved"); } catch (e) { toast(e.message, true); } };
+$("resetAll").onclick = () => {
+  if (!state) return;
+  const dsp = {}; for (const k in state.overrides) dsp[k] = null;
+  send({ dsp });
+};
+
+// ---- drawing ----
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function fit(canvas) {
+  const r = canvas.getBoundingClientRect(), k = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(r.width * k)) { canvas.width = Math.round(r.width * k); canvas.height = Math.round(r.height * k); }
+  const c = canvas.getContext("2d"); c.setTransform(k, 0, 0, k, 0, 0); c.clearRect(0, 0, r.width, r.height);
+  return [c, r.width, r.height];
+}
+const history = []; const SPAN = 150; // 150 samples at 80 ms = 12 s
+let now = null;
+
+function drawScope() {
+  const [c, w, h] = fit($("scope"));
+  const top = 8, mid = h * 0.68, y = (db) => top + (Math.min(0, Math.max(-60, db)) / -60) * (mid - top);
+  const x = (i) => w - (history.length - 1 - i) * (w / (SPAN - 1));
+  c.font = "11px system-ui"; c.fillStyle = css("--muted"); c.strokeStyle = css("--line"); c.lineWidth = 1;
+  for (const db of [0, -20, -40, -60]) { c.beginPath(); c.moveTo(0, y(db)); c.lineTo(w, y(db)); c.stroke(); c.fillText(db + " dB", 4, db === -60 ? y(db) - 4 : y(db) + 12); }
+  const p = state && state.params;
+  if (p && p.volume_threshold_db > -89) {
+    c.setLineDash([5, 4]); c.strokeStyle = css("--volume"); c.beginPath(); c.moveTo(0, y(p.volume_threshold_db)); c.lineTo(w, y(p.volume_threshold_db)); c.stroke(); c.setLineDash([]);
+    c.fillText("volume threshold", w - 96, y(p.volume_threshold_db) - 4);
+  }
+  const line = (field, color, width, dash) => {
+    c.beginPath(); c.strokeStyle = css(color); c.lineWidth = width; c.setLineDash(dash || []);
+    history.forEach((m, i) => (i ? c.lineTo(x(i), y(m[field])) : c.moveTo(x(i), y(m[field]))));
+    c.stroke(); c.setLineDash([]);
+  };
+  line("volume_db", "--volume", 1.5); line("floor_db", "--floor", 1.5, [4, 3]); line("bass_db", "--bass", 2);
+  // Haptic strength as a filled strip underneath, impacts as ticks on it.
+  const base = h - 4, tall = base - (mid + 12);
+  c.fillStyle = css("--out"); c.globalAlpha = 0.85; c.beginPath(); c.moveTo(x(0), base);
+  history.forEach((m, i) => c.lineTo(x(i), base - m.output * tall)); c.lineTo(w, base); c.fill(); c.globalAlpha = 1;
+  c.fillStyle = css("--hit");
+  history.forEach((m, i) => { if (m.onset > 0.15) c.fillRect(x(i) - 1, mid + 5, 2.5, 3 + m.onset * 9); });
+}
+function drawCurve() {
+  const [c, w, h] = fit($("curve"));
+  const L = 30, B = 22, T = 8, R = 8;
+  const x = (db) => L + ((db + 60) / 60) * (w - L - R), y = (v) => h - B - v * (h - B - T);
+  c.font = "11px system-ui"; c.fillStyle = css("--muted"); c.strokeStyle = css("--line"); c.lineWidth = 1;
+  for (const db of [-60, -40, -20, 0]) { c.beginPath(); c.moveTo(x(db), T); c.lineTo(x(db), h - B); c.stroke(); c.fillText(db, x(db) - 9, h - 6); }
+  for (const v of [0, 0.5, 1]) { c.beginPath(); c.moveTo(L, y(v)); c.lineTo(w - R, y(v)); c.stroke(); c.fillText(v * 100 + "%", 2, y(v) + 4); }
+  if (!state) return;
+  const pts = state.response_curve;
+  c.beginPath(); c.strokeStyle = css("--bass"); c.lineWidth = 2.5;
+  pts.forEach(([db, v], i) => (i ? c.lineTo(x(db), y(v)) : c.moveTo(x(db), y(v)))); c.stroke();
+  if (now) {
+    const db = Math.max(-60, Math.min(0, now.bass_db));
+    c.fillStyle = css("--out"); c.beginPath(); c.arc(x(db), y(Math.min(1, now.output)), 5.5, 0, 7); c.fill();
+  }
+}
+
+async function pollMeter() {
+  try {
+    now = await api({ cmd: "meter" });
+    history.push(now); if (history.length > SPAN) history.shift();
+    renderDevice(now.output_device, now.capture);
+    drawScope(); drawCurve();
+  } catch (e) { $("dot").className = "dot"; $("device").textContent = "Service not reachable"; }
+  setTimeout(pollMeter, 80);
+}
+async function pollStatus() {
+  try { render(await api({ cmd: "status" })); } catch (e) { /* shown by the meter poll */ }
+  setTimeout(pollStatus, 1500);
+}
+pollStatus(); pollMeter();
+addEventListener("resize", () => { drawScope(); drawCurve(); });
+</script>
+</body>
+</html>

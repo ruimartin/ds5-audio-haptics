@@ -26,6 +26,8 @@
 # background_rise_db_s = 3      # how fast sustained sound becomes "background" (dB per second);
                                 # lower keeps long firefights strong, higher fades music sooner
 # background_fall_ms = 1000     # how quickly the estimate drops when things go quiet
+# volume_threshold_db = -90     # ignore everything quieter than this (overall volume, dBFS);
+                                # -90 = off. Try -20 when music is quieter than the effects
 # gate_db = -48                 # mute below this level
 # curve = 0.85                  # below 1 lifts quiet content, 1 = linear
 # comp_threshold_db = -6        # compressor
@@ -42,6 +44,10 @@
 # transient_click_hz = 200      # pulse pitch for bright hits (menu blips, clicks)
 # transient_decay_ms = 35
 # transient_open_ms = 250       # after a hit, let its bass through at full strength this long
+
+[ui]
+# enabled = true         # settings page at http://127.0.0.1:5757 (this machine only)
+# port = 5757
 
 [output]
 # buffer_len = 48         # controller buffer hint (16..127), effect unmeasured

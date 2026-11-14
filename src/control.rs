@@ -12,7 +12,7 @@
 //! In `dsp`, a value overrides the preset and `null` returns that key to the preset.
 
 use crate::config::{Config, DspOverrides};
-use crate::dsp::lowpass_delay_ms;
+use crate::dsp::{lowpass_delay_ms, response_curve};
 use crate::service::Shared;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -36,6 +36,8 @@ pub fn status(shared: &Shared) -> Value {
         "preset": cfg.preset,
         "overrides": cfg.dsp,
         "filter_delay_ms": lowpass_delay_ms(params.lowpass_hz),
+        "response_curve": response_curve(&params),
+        "ui": cfg.ui.enabled.then(|| format!("http://127.0.0.1:{}/", cfg.ui.port)),
         "params": params,
         "capture": *shared.capture.lock().unwrap(),
         "output": *shared.sink.lock().unwrap(),
@@ -79,16 +81,44 @@ fn apply_set(cfg: &Config, req: &Value) -> Result<Config, String> {
     Ok(new)
 }
 
-fn handle(shared: &Shared, line: &str) -> Value {
-    let req: Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        Err(e) => return json!({"ok": false, "error": format!("bad JSON: {e}")}),
+/// Levels since the previous call, for the live display.
+fn meter(shared: &Shared) -> Value {
+    shared.meter_watched();
+    let m = {
+        let mut held = shared.meter.lock().unwrap();
+        let m = *held;
+        // Peaks restart; the background estimate is a level, not a peak.
+        *held = crate::dsp::Meter { floor_db: m.floor_db, ..Default::default() };
+        m
     };
+    let db = |v: f32| (20.0 * v.max(1e-6).log10()).max(-90.0);
+    json!({
+        "ok": true,
+        "volume_db": db(m.volume),
+        "bass_db": db(m.bass),
+        "floor_db": m.floor_db,
+        "output": m.output,
+        "onset": m.onset,
+        "capture": *shared.capture.lock().unwrap(),
+        "output_device": *shared.sink.lock().unwrap(),
+    })
+}
+
+fn handle(shared: &Shared, line: &str) -> Value {
+    match serde_json::from_str(line) {
+        Ok(req) => handle_value(shared, &req),
+        Err(e) => json!({"ok": false, "error": format!("bad JSON: {e}")}),
+    }
+}
+
+/// Executes one request. Shared by the socket and the settings page.
+pub fn handle_value(shared: &Shared, req: &Value) -> Value {
     let result = match req.get("cmd").and_then(Value::as_str) {
         Some("status") => return status(shared),
+        Some("meter") => return meter(shared),
         Some("set") => {
             let mut cfg = shared.config.lock().unwrap();
-            apply_set(&cfg, &req).map(|new| {
+            apply_set(&cfg, req).map(|new| {
                 *cfg = new;
                 shared.generation.fetch_add(1, Relaxed);
             })
@@ -99,7 +129,7 @@ fn handle(shared: &Shared, line: &str) -> Value {
             shared.latency_avg_us.store(0, Relaxed);
             Ok(())
         }
-        _ => Err("cmd must be status, set, save or reset_stats".to_string()),
+        _ => Err("cmd must be status, meter, set, save or reset_stats".to_string()),
     };
     match result {
         Ok(()) => status(shared),

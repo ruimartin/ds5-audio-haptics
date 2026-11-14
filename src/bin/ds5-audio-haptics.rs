@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use ds5_audio_haptics::config::Config;
-use ds5_audio_haptics::{control, service};
+use ds5_audio_haptics::{control, service, web};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -12,6 +12,7 @@ const USAGE: &str = "\
 ds5-audio-haptics: DualSense HD haptics from system audio
 
   ds5-audio-haptics run [--config PATH]   run the service (what the systemd unit does)
+  ds5-audio-haptics ui                    open the settings page in your browser
   ds5-audio-haptics status                show state, settings and timing
   ds5-audio-haptics set KEY=VALUE ...     change settings on the running service
   ds5-audio-haptics save                  write the running settings to the config file
@@ -38,7 +39,16 @@ fn run(args: &[String]) -> Result<(), String> {
             eprintln!("config: {} (preset {:?}, mode {:?})", path.display(), config.preset, config.mode);
             let shared = service::Shared::new(config, path);
             control::start(shared.clone())?;
+            web::start(shared.clone());
             service::run(shared)
+        }
+        Some("ui") => {
+            let status = control::request(&json!({"cmd": "status"}))?;
+            let url = status["ui"].as_str().ok_or("the settings page is disabled ([ui] enabled = false)")?;
+            println!("{url}");
+            // Best effort; the URL above is there to copy if no browser opens.
+            let _ = std::process::Command::new("xdg-open").arg(url).status();
+            Ok(())
         }
         Some("status") => print(control::request(&json!({"cmd": "status"}))?),
         Some("save") => print(control::request(&json!({"cmd": "save"}))?),

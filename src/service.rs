@@ -7,7 +7,7 @@
 use crate::capture::Capture;
 use crate::config::{Config, Mode};
 use crate::device::{self, Bus};
-use crate::dsp::Processor;
+use crate::dsp::{Meter, Processor};
 use crate::protocol::{ControlForm, ReportBuilder, PAYLOAD, REPORT_PERIOD_NS};
 use crate::rumble::{self, Rumble};
 use std::collections::VecDeque;
@@ -29,6 +29,11 @@ pub struct Shared {
     /// False while no controller is usable; audio capture is stopped meanwhile.
     pub sink_present: AtomicBool,
     pub capture: Mutex<String>,
+    started: Instant,
+    /// When the settings page last asked for levels (ms since start, 0 = never).
+    meter_seen_ms: AtomicU64,
+    /// Levels since the settings page last asked.
+    pub meter: Mutex<Meter>,
     pub reports_sent: AtomicU64,
     pub reports_dropped: AtomicU64,
     pub write_errors: AtomicU64,
@@ -46,6 +51,9 @@ impl Shared {
             sink: Mutex::new("none".into()),
             sink_present: AtomicBool::new(false),
             capture: Mutex::new("stopped".into()),
+            started: Instant::now(),
+            meter_seen_ms: AtomicU64::new(0),
+            meter: Mutex::new(Meter { floor_db: -90.0, ..Default::default() }),
             reports_sent: AtomicU64::new(0),
             reports_dropped: AtomicU64::new(0),
             write_errors: AtomicU64::new(0),
@@ -56,6 +64,19 @@ impl Shared {
 
     pub fn config(&self) -> Config {
         self.config.lock().unwrap().clone()
+    }
+
+    /// Called when someone reads the meters: keeps capture alive for the live display.
+    pub fn meter_watched(&self) {
+        self.meter_seen_ms.store(self.started.elapsed().as_millis() as u64 + 1, Relaxed);
+    }
+
+    /// Capture runs while a controller is connected, or while the settings page is
+    /// open, so the levels can be watched and tuned without one.
+    fn capture_wanted(&self) -> bool {
+        let seen = self.meter_seen_ms.load(Relaxed);
+        self.sink_present.load(Relaxed)
+            || (seen > 0 && self.started.elapsed().as_millis() as u64 <= seen + 3000)
     }
 
     fn set_sink(&self, text: String) {
@@ -111,10 +132,10 @@ fn capture_loop(shared: &Shared, tx: &SyncSender<Frame>) {
         }
         return;
     }
-    if !shared.sink_present.load(Relaxed) {
+    if !shared.capture_wanted() {
         // No controller: do not keep an audio stream open for nothing.
         shared.set_capture("waiting for a controller");
-        while !shared.sink_present.load(Relaxed) && shared.generation.load(Relaxed) == generation {
+        while !shared.capture_wanted() && shared.generation.load(Relaxed) == generation {
             std::thread::sleep(Duration::from_millis(250));
         }
         return;
@@ -138,7 +159,7 @@ fn capture_loop(shared: &Shared, tx: &SyncSender<Frame>) {
             Err(e) => return shared.set_capture(&format!("read error: {e}")),
         }
         let born = Instant::now();
-        if !shared.sink_present.load(Relaxed) {
+        if !shared.capture_wanted() {
             return;
         }
 
@@ -156,6 +177,15 @@ fn capture_loop(shared: &Shared, tx: &SyncSender<Frame>) {
         }
 
         dsp.process(&audio, &mut pending);
+        {
+            let new = dsp.take_meter();
+            let mut m = shared.meter.lock().unwrap();
+            m.volume = m.volume.max(new.volume);
+            m.bass = m.bass.max(new.bass);
+            m.output = m.output.max(new.output);
+            m.onset = m.onset.max(new.onset);
+            m.floor_db = new.floor_db;
+        }
         let mut used = 0;
         for chunk in pending.chunks_exact(PAYLOAD) {
             let frame = Frame {

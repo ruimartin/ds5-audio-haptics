@@ -36,6 +36,7 @@ pub struct Config {
     pub capture: Capture,
     pub dsp: DspOverrides,
     pub output: Output,
+    pub ui: Ui,
 }
 
 impl Default for Config {
@@ -48,6 +49,7 @@ impl Default for Config {
             capture: Capture::default(),
             dsp: DspOverrides::default(),
             output: Output::default(),
+            ui: Ui::default(),
         }
     }
 }
@@ -86,6 +88,21 @@ impl Default for Output {
     }
 }
 
+/// The settings page, served on this machine only.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ui {
+    pub enabled: bool,
+    /// TCP port on 127.0.0.1.
+    pub port: u16,
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self { enabled: true, port: 5757 }
+    }
+}
+
 /// Resolved DSP settings. See `Preset::params` for the defaults.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Params {
@@ -109,7 +126,11 @@ pub struct Params {
     pub background_rise_db_s: f32,
     /// How quickly the estimate drops back when things go quiet again.
     pub background_fall_ms: f32,
-    /// Below this level the output is muted.
+    /// Sounds whose overall volume is below this are ignored entirely (dBFS of the
+    /// full mix, not just the bass). -90 turns it off. Useful when background music
+    /// is quieter than the effects.
+    pub volume_threshold_db: f32,
+    /// Noise gate on the bass band: below this level the output is muted.
     pub gate_db: f32,
     /// Level exponent: below 1 lifts quiet content, 1 is linear.
     pub curve: f32,
@@ -155,7 +176,7 @@ overrides! {
     intensity: f32, stereo: bool, stereo_width: f32, lowpass_hz: f32, highpass_hz: f32,
     bass_boost_db: f32, bass_boost_hz: f32, background_reject: f32, background_rise_db_s: f32,
     background_fall_ms: f32,
-    gate_db: f32, curve: f32, comp_threshold_db: f32, comp_ratio: f32, attack_ms: f32,
+    volume_threshold_db: f32, gate_db: f32, curve: f32, comp_threshold_db: f32, comp_ratio: f32, attack_ms: f32,
     release_ms: f32, makeup_db: f32, ceiling: f32, transient: bool,
     transient_highpass_hz: f32, transient_sensitivity: f32, transient_gain: f32,
     transient_pulse_hz: f32, transient_click_hz: f32, transient_decay_ms: f32, transient_open_ms: f32,
@@ -175,6 +196,7 @@ impl Preset {
             background_reject: 0.9,
             background_rise_db_s: 3.0,
             background_fall_ms: 1000.0,
+            volume_threshold_db: -90.0,
             gate_db: -48.0,
             curve: 0.85,
             comp_threshold_db: -6.0,
@@ -228,6 +250,7 @@ impl Config {
         p.background_reject = p.background_reject.clamp(0.0, 1.0);
         p.background_rise_db_s = p.background_rise_db_s.clamp(0.2, 60.0);
         p.background_fall_ms = p.background_fall_ms.clamp(200.0, 30_000.0);
+        p.volume_threshold_db = p.volume_threshold_db.clamp(-90.0, 0.0);
         p.gate_db = p.gate_db.clamp(-90.0, -10.0);
         p.curve = p.curve.clamp(0.3, 1.5);
         p.comp_threshold_db = p.comp_threshold_db.clamp(-60.0, 0.0);

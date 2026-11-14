@@ -213,6 +213,46 @@ impl Pulse {
     }
 }
 
+/// Static response of the dynamics stage: output level in dB for a bass-band level
+/// of `db`, before intensity and the limiter. `None` below the gate.
+pub fn response_db(db: f32, p: &Params) -> Option<f32> {
+    if db < p.gate_db {
+        return None;
+    }
+    let mut out = db * p.curve;
+    if out > p.comp_threshold_db {
+        out = p.comp_threshold_db + (out - p.comp_threshold_db) / p.comp_ratio;
+    }
+    // Never lift by more than 30 dB, so noise just above the gate stays modest.
+    Some((out + p.makeup_db).min(db + 30.0))
+}
+
+/// Final strength 0..1 for a steady bass-band level, as the settings page plots it.
+pub fn response_curve(p: &Params) -> Vec<(f32, f32)> {
+    (-60..=0)
+        .map(|db| {
+            let db = db as f32;
+            let out = response_db(db, p).map_or(0.0, |o| 10f32.powf(o / 20.0) * p.intensity);
+            (db, p.ceiling * (out / p.ceiling).tanh())
+        })
+        .collect()
+}
+
+/// What the settings page shows live. Peaks hold until the next `take_meter`.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Meter {
+    /// Overall volume of the mix, linear peak.
+    pub volume: f32,
+    /// Bass-band level entering the dynamics stage, linear peak.
+    pub bass: f32,
+    /// Background estimate, dB.
+    pub floor_db: f32,
+    /// Haptic output, 0..1 peak.
+    pub output: f32,
+    /// Strongest onset, 0..1.
+    pub onset: f32,
+}
+
 /// Gate, level curve and compressor as one gain computer on a shared envelope.
 struct Dynamics {
     env: f32,
@@ -223,6 +263,10 @@ struct Dynamics {
     /// 0..1, set by onsets and decaying: how far background rejection is lifted.
     open_by_onset: f32,
 }
+
+/// Onsets at least this strong hold the background estimate still. Weaker ones
+/// (ambience, soft drum hits) must not, or music would never settle as background.
+const FREEZE: f32 = 0.25;
 
 impl Dynamics {
     #[inline]
@@ -243,23 +287,18 @@ impl Dynamics {
         let level = db.max(p.gate_db);
         if level < self.floor_db {
             self.floor_db += coeff(p.background_fall_ms, OUTPUT_RATE) * (level - self.floor_db);
-        } else if self.open_by_onset < 0.1 {
+        } else if self.open_by_onset < FREEZE {
             self.floor_db = (self.floor_db + p.background_rise_db_s / OUTPUT_RATE).min(level);
         }
         // Full strength when 9 dB or more above the floor, up to 30 dB down at the floor.
         let above = ((db - self.floor_db) / 9.0).clamp(0.0, 1.0);
         let reject_db = -30.0 * p.background_reject * (1.0 - above) * (1.0 - self.open_by_onset);
 
-        let target = if !self.open {
-            0.0
-        } else {
-            let mut out = db * p.curve + reject_db;
-            if out > p.comp_threshold_db {
-                out = p.comp_threshold_db + (out - p.comp_threshold_db) / p.comp_ratio;
-            }
-            // Never lift by more than 30 dB, so noise just above the gate stays modest.
-            let gain_db = (out + p.makeup_db - db).min(30.0);
-            10f32.powf(gain_db / 20.0)
+        let target = match response_db(db, p) {
+            Some(out) if self.open => 10f32.powf((out + reject_db * p.curve - db) / 20.0),
+            // Inside the hysteresis band the gate is still open but the curve says shut.
+            None if self.open => 10f32.powf((db * p.curve + p.makeup_db + reject_db - db).min(30.0) / 20.0),
+            _ => 0.0,
         };
         // Gain falling = compressor attack; gain rising = release.
         let ms = if target < self.gain { p.attack_ms } else { p.release_ms };
@@ -327,6 +366,10 @@ pub struct Processor {
     sub: BandLevel,
     mid: BandLevel,
     phase: usize,
+    /// Peak envelope of the full mix, for the volume threshold.
+    volume: f32,
+    volume_gain: f32,
+    meter: Meter,
 }
 
 impl Processor {
@@ -341,6 +384,9 @@ impl Processor {
             sub: Default::default(),
             mid: Default::default(),
             phase: 0,
+            volume: 0.0,
+            volume_gain: 1.0,
+            meter: Meter::default(),
         };
         p.set_params(params);
         p
@@ -383,6 +429,8 @@ impl Processor {
             }
             self.sub.run(mono);
             self.mid.run(mono);
+            // Instant attack, about 150 ms release: the tail of a loud sound still counts.
+            self.volume = l.abs().max(r.abs()).max(self.volume * 0.99986);
 
             self.phase += 1;
             if self.phase < DECIMATION {
@@ -390,12 +438,26 @@ impl Processor {
             }
             self.phase = 0;
 
-            let low = 0.5 * (low_l + low_r) * p.intensity;
+            let low = 0.5 * (low_l + low_r);
             let trigger = if p.transient { self.onset.take() } else { (0.0, 0.0) };
             let open = if p.transient_open_ms > 0.0 { trigger.0 } else { 0.0 };
             let gain = self.dynamics.run(low.abs(), open, &p);
-            let pulse = self.pulse.run(trigger, &p) * p.transient_gain * p.intensity.min(1.0);
-            let v = low * gain + pulse;
+            let pulse = self.pulse.run(trigger, &p) * p.transient_gain;
+
+            // Volume threshold: fully ignored below it, fully felt 6 dB above it.
+            let over = 20.0 * self.volume.max(1e-6).log10() - p.volume_threshold_db;
+            let t = if p.volume_threshold_db <= -89.0 { 1.0 } else { (over / 6.0).clamp(0.0, 1.0) };
+            // Opens within a millisecond so attacks survive, closes gently.
+            let ms = if t * t > self.volume_gain { 1.0 } else { 20.0 };
+            self.volume_gain += coeff(ms, OUTPUT_RATE) * (t * t - self.volume_gain);
+
+            let v = (low * gain + pulse) * p.intensity * self.volume_gain;
+
+            self.meter.volume = self.meter.volume.max(self.volume);
+            self.meter.bass = self.meter.bass.max(self.dynamics.env);
+            self.meter.floor_db = self.dynamics.floor_db;
+            self.meter.onset = self.meter.onset.max(trigger.0);
+            self.meter.output = self.meter.output.max((p.ceiling * (v / p.ceiling).tanh()).abs());
 
             let (gl, gr) = if p.stereo { self.panner.gains(p.stereo_width) } else { (1.0, 1.0) };
             for v in [v * gl, v * gr] {
@@ -406,17 +468,22 @@ impl Processor {
         }
     }
 
+    /// Levels since the previous call.
+    pub fn take_meter(&mut self) -> Meter {
+        std::mem::take(&mut self.meter)
+    }
+
     /// (sub-bass, low-mid) levels 0..1 for the rumble fallback.
     pub fn rumble_levels(&self) -> (f32, f32) {
         let p = &self.params;
         let shape = |env: f32| {
-            let db = 20.0 * (env * p.intensity).max(1e-6).log10();
+            let db = 20.0 * env.max(1e-6).log10();
             if db < p.gate_db {
                 0.0
             } else {
                 // Same level curve as the HD path, plus 12 dB because band envelopes
                 // of real audio sit far below full scale.
-                (10f32.powf((db * p.curve + 12.0) / 20.0)).min(1.0)
+                (10f32.powf((db * p.curve + 12.0) / 20.0) * p.intensity * self.volume_gain).min(1.0)
             }
         };
         (shape(self.sub.env), shape(self.mid.env))
@@ -553,6 +620,32 @@ mod tests {
         let flat = run(&plain(), &input);
         let late = flat[flat.len() - 6000..].chunks(2).map(|f| (f[0] as i32).abs()).max().unwrap();
         assert!(late >= 22, "late {late}");
+    }
+
+    #[test]
+    fn volume_threshold_ignores_quiet_sounds() {
+        let p = Params { volume_threshold_db: -20.0, ..plain() };
+        // -30 dBFS: under the threshold, nothing. -10 dBFS: over it, untouched.
+        assert!(run(&p, &sine(60.0, 0.03, 1.0)).iter().all(|&s| s == 0));
+        let loud = settled_peak(&run(&p, &sine(60.0, 0.3, 1.0)));
+        let reference = settled_peak(&run(&plain(), &sine(60.0, 0.3, 1.0)));
+        assert_eq!(loud, reference);
+        // Off by default.
+        assert!(settled_peak(&run(&plain(), &sine(60.0, 0.03, 1.0))) >= 3);
+    }
+
+    #[test]
+    fn response_curve_matches_processing() {
+        // The plotted curve must be what a steady tone actually produces.
+        let p = Params { stereo: false, background_reject: 0.0, bass_boost_db: 0.0, transient: false, ..Preset::Game.params() };
+        let curve = response_curve(&p);
+        for db in [-40.0f32, -24.0, -12.0, -3.0] {
+            let amp = 10f32.powf(db / 20.0);
+            let got = settled_peak(&run(&p, &sine(50.0, amp, 1.5))) as f32 / 127.0;
+            let want = curve.iter().find(|c| c.0 == db).unwrap().1;
+            assert!((got - want).abs() < 0.06, "{db} dB: got {got} want {want}");
+        }
+        assert_eq!(curve[0].1, 0.0); // -60 dB is under the gate
     }
 
     #[test]

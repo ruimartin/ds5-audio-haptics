@@ -15,3 +15,4 @@ pub mod dsp;
 pub mod protocol;
 pub mod rumble;
 pub mod service;
+pub mod web;
