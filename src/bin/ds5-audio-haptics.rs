@@ -20,7 +20,8 @@ ds5-audio-haptics: DualSense HD haptics from system audio
   ds5-audio-haptics render [--config PATH] <in.f32 >out.s8
                                           offline: 48 kHz stereo f32 in, 3 kHz stereo s8 out
 
-Keys for `set`: enabled, preset (game|music), mode (auto|hd|rumble), and any [dsp]
+Keys for `set`: enabled, preset (game|music), mode (auto|hd|rumble), lan (true|false:
+settings page reachable from other devices on your network), and any [dsp]
 key such as intensity, lowpass_hz, stereo, transient. VALUE `default` returns a
 [dsp] key to the preset.
 ";
@@ -46,9 +47,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let status = control::request(&json!({"cmd": "status"}))?;
             let url = status["ui"].as_str().ok_or("the settings page is disabled ([ui] enabled = false)")?;
             println!("{url}");
-            // Best effort; the URL above is there to copy if no browser opens.
-            let _ = std::process::Command::new("xdg-open").arg(url).status();
-            Ok(())
+            open_ui(url)
         }
         Some("status") => print(control::request(&json!({"cmd": "status"}))?),
         Some("save") => print(control::request(&json!({"cmd": "save"}))?),
@@ -63,7 +62,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     _ => serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.into())),
                 };
                 match key {
-                    "enabled" | "preset" | "mode" => req[key] = value,
+                    "enabled" | "preset" | "mode" | "lan" => req[key] = value,
                     _ => drop(dsp.insert(key.into(), value)),
                 }
             }
@@ -93,6 +92,71 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         _ => Err(String::new()),
     }
+}
+
+/// Opens the settings page. On a desktop this hands the URL to the default browser.
+/// Inside Steam's Gaming Mode (gamescope) it runs a browser full screen and waits
+/// for it, so the page can be added to Steam as a non-Steam game.
+fn open_ui(url: &str) -> Result<(), String> {
+    use std::process::Command;
+    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none() {
+        // Best effort; the printed URL is there to copy if no browser opens.
+        let _ = Command::new("xdg-open").arg(url).status();
+        return Ok(());
+    }
+    let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
+    // (flatpak id or program, is_flatpak, is_firefox)
+    let browsers = [
+        ("org.mozilla.firefox", true, true),
+        ("com.google.Chrome", true, false),
+        ("org.chromium.Chromium", true, false),
+        ("com.brave.Browser", true, false),
+        ("firefox", false, true),
+        ("chromium", false, false),
+        ("google-chrome", false, false),
+    ];
+    for (name, flatpak, firefox) in browsers {
+        let present = if flatpak {
+            Command::new("flatpak").args(["info", name]).output().map(|o| o.status.success()).unwrap_or(false)
+        } else {
+            Command::new("sh").args(["-c", &format!("command -v {name}")]).output().map(|o| o.status.success()).unwrap_or(false)
+        };
+        if !present {
+            continue;
+        }
+        // A profile of its own: the browser must not hand the page to an instance
+        // that is already running and exit, or Steam would think the "game" quit.
+        // For a flatpak it has to live where the sandbox can see it.
+        let profile = if flatpak {
+            format!("{home}/.var/app/{name}/ds5-audio-haptics")
+        } else {
+            format!("{home}/.cache/ds5-audio-haptics/browser")
+        };
+        std::fs::create_dir_all(&profile).map_err(|e| format!("{profile}: {e}"))?;
+        let mut cmd = if flatpak {
+            let mut c = Command::new("flatpak");
+            c.args(["run", name]);
+            c
+        } else {
+            Command::new(name)
+        };
+        if firefox {
+            // Skip the first-run pages and prompts a fresh profile would show.
+            let prefs = "user_pref(\"browser.aboutwelcome.enabled\", false);\n\
+                user_pref(\"browser.shell.checkDefaultBrowser\", false);\n\
+                user_pref(\"datareporting.policy.dataSubmissionEnabled\", false);\n\
+                user_pref(\"browser.startup.homepage_override.mstone\", \"ignore\");\n\
+                user_pref(\"toolkit.telemetry.reportingpolicy.firstRun\", false);\n";
+            std::fs::write(format!("{profile}/user.js"), prefs).map_err(|e| format!("{profile}: {e}"))?;
+            cmd.args(["--kiosk", "--new-instance", "--profile", &profile, url]);
+        } else {
+            cmd.args(["--kiosk", "--no-first-run", "--no-default-browser-check"])
+                .arg(format!("--user-data-dir={profile}"))
+                .arg(url);
+        }
+        return cmd.status().map(|_| ()).map_err(|e| format!("{name}: {e}"));
+    }
+    Err("no browser found: install Firefox from Discover in Desktop Mode".into())
 }
 
 fn print(reply: Value) -> Result<(), String> {

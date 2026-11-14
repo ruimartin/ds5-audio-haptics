@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! {"cmd":"status"}
-//! {"cmd":"set","enabled":true,"preset":"music","mode":"auto","dsp":{"intensity":0.8,"lowpass_hz":null}}
+//! {"cmd":"set","enabled":true,"preset":"music","mode":"auto","lan":false,"dsp":{"intensity":0.8,"lowpass_hz":null}}
 //! {"cmd":"save"}
 //! ```
 //! In `dsp`, a value overrides the preset and `null` returns that key to the preset.
@@ -38,6 +38,11 @@ pub fn status(shared: &Shared) -> Value {
         "filter_delay_ms": lowpass_delay_ms(params.lowpass_hz),
         "response_curve": response_curve(&params),
         "ui": cfg.ui.enabled.then(|| format!("http://127.0.0.1:{}/", cfg.ui.port)),
+        "lan": cfg.ui.lan,
+        "ui_lan": (cfg.ui.enabled && cfg.ui.lan)
+            .then(crate::web::lan_address)
+            .flatten()
+            .map(|ip| format!("http://{ip}:{}/", cfg.ui.port)),
         "params": params,
         "capture": *shared.capture.lock().unwrap(),
         "output": *shared.sink.lock().unwrap(),
@@ -62,6 +67,7 @@ fn apply_set(cfg: &Config, req: &Value) -> Result<Config, String> {
             "enabled" => new.enabled = serde_json::from_value(value.clone()).map_err(bad)?,
             "preset" => new.preset = serde_json::from_value(value.clone()).map_err(bad)?,
             "mode" => new.mode = serde_json::from_value(value.clone()).map_err(bad)?,
+            "lan" => new.ui.lan = serde_json::from_value(value.clone()).map_err(bad)?,
             "dsp" => {
                 let mut merged = serde_json::to_value(&new.dsp).map_err(bad)?;
                 let changes = value.as_object().ok_or("dsp must be an object")?;

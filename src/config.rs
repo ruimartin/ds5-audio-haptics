@@ -88,18 +88,20 @@ impl Default for Output {
     }
 }
 
-/// The settings page, served on this machine only.
+/// The settings page.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ui {
     pub enabled: bool,
-    /// TCP port on 127.0.0.1.
     pub port: u16,
+    /// false: reachable from this machine only. true: also from other devices on the
+    /// local network (phone, laptop), without a password.
+    pub lan: bool,
 }
 
 impl Default for Ui {
     fn default() -> Self {
-        Self { enabled: true, port: 5757 }
+        Self { enabled: true, port: 5757, lan: false }
     }
 }
 

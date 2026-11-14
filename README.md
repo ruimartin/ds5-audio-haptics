@@ -100,9 +100,45 @@ ds5-audio-haptics ui        # opens http://127.0.0.1:5757/
 - Every change applies immediately. **Save as default** keeps it across restarts; the ↺ next
   to a slider returns that one setting to the preset.
 
-The page is only reachable from the same machine (it listens on 127.0.0.1 and refuses requests
-coming from other web sites). On a Steam Deck, open it in Desktop Mode. Set `[ui] enabled =
-false` in the config file to turn it off.
+#### In Gaming Mode on a Steam Deck
+
+The page can be added to Steam like a game, no Decky needed:
+
+1. Switch to Desktop Mode and open Steam.
+2. **Games → Add a Non-Steam Game to My Library…**, tick **DualSense Audio Haptics**, **Add
+   Selected Programs**.
+3. Back in Gaming Mode it is in your library under Non-Steam. Launched from there it opens
+   full screen in Firefox (or Chrome / Chromium if that is what you have; install one from
+   Discover if there is none). Use the touch screen or the trackpad; close it with
+   **STEAM → Exit game**.
+
+A game can stay running while you tune: switch between it and the page from the STEAM menu.
+
+#### From your phone, while you play
+
+<img src="docs/img/settings-phone.png" alt="The settings page on a phone" width="260" align="right">
+
+By default the page is only reachable from the machine itself. To open it from another device
+on your home network, tick **Allow other devices on my network** at the bottom of the page, or:
+
+```sh
+ds5-audio-haptics set lan=true
+ds5-audio-haptics save            # keep it on after a restart
+ds5-audio-haptics status | grep ui_lan
+#  "ui_lan": "http://192.168.1.47:5757/",
+```
+
+Open that address in your phone's browser and tune while the game is running on the Deck or
+PC. This is the easiest way to adjust things in Gaming Mode.
+
+There is no password: with this on, anyone on your local network can change the haptics
+settings (nothing else is exposed). The service answers only private network addresses and
+refuses requests that come through another web site. Leave it off on networks you do not
+trust. If a firewall is active, TCP port 5757 must be allowed.
+
+<br clear="right">
+
+Set `[ui] enabled = false` in the config file to turn the page off entirely.
 
 ### Command line
 

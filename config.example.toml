@@ -48,6 +48,8 @@
 [ui]
 # enabled = true         # settings page at http://127.0.0.1:5757 (this machine only)
 # port = 5757
+# lan = false            # true: also reachable from other devices on your local network
+                        # (http://<this machine's address>:5757), without a password
 
 [output]
 # buffer_len = 48         # controller buffer hint (16..127), effect unmeasured

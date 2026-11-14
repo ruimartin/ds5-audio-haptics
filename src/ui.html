@@ -115,6 +115,7 @@ footer { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin:
   <button class="primary" id="save">Save as default</button>
   <button id="resetAll">Reset all to preset</button>
   <span>Changes apply immediately. Save keeps them after a restart.</span>
+  <label class="toggle" style="flex-basis:100%"><input type="checkbox" id="lan"><span>Allow other devices on my network to open this page <span id="lanUrl"></span></span></label>
   <span id="toast" role="status"></span>
 </footer>
 </main>
@@ -217,6 +218,8 @@ function render(s) {
   state = s;
   $(s.enabled ? "en1" : "en0").checked = true;
   $(s.preset === "music" ? "pm" : "pg").checked = true;
+  $("lan").checked = s.lan;
+  $("lanUrl").textContent = s.lan ? (s.ui_lan ? "— open " + s.ui_lan + " on your phone. No password: anyone on your network can change these settings." : "— no network address found") : "(for example from your phone while you play)";
   for (const g of GROUPS) for (const row of g.rows) {
     const input = $("c_" + row.key), v = s.params[row.key], changed = row.key in s.overrides;
     $("r_" + row.key).classList.toggle("on", changed);
@@ -239,6 +242,7 @@ function renderDevice(output, capture) {
 
 for (const el of document.querySelectorAll("input[name=enabled]")) el.onchange = () => send({ enabled: el.value === "true" });
 for (const el of document.querySelectorAll("input[name=preset]")) el.onchange = () => send({ preset: el.value });
+$("lan").onchange = () => send({ lan: $("lan").checked });
 $("save").onclick = async () => { try { await api({ cmd: "save" }); toast("Saved"); } catch (e) { toast(e.message, true); } };
 $("resetAll").onclick = () => {
   if (!state) return;
